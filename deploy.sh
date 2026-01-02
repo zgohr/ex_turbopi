@@ -47,7 +47,7 @@ ssh "$PI_HOST" << 'EOF'
     mix compile
 
     echo "[*] Building assets..."
-    mix assets.deploy 2>/dev/null || true
+    cd apps/ex_turbopi_web && mix assets.deploy && cd ../..
 
     echo "[*] Building release..."
     mix release --overwrite
