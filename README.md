@@ -5,7 +5,7 @@ Elixir/Phoenix replacement for the ROS2 Docker stack on Hiwonder TurboPi robot.
 ## Features
 
 - Web-based control dashboard (Phoenix LiveView)
-- Motor controls with adjustable speed (WASD + QE keys)
+- Motor controls with adjustable speed (W/S forward/back, Q/E strafe, A/D rotate)
 - Gimbal pan/tilt control (arrow keys)
 - Live camera streaming (MJPEG) with distance HUD overlay
 - Collision avoidance (auto-stops at 17cm from obstacles)

@@ -13,6 +13,7 @@ defmodule Board.Application do
     children = [
       Board.Connection,
       Board.Sonar,
+      Board.LineFollower,
       Board.Battery,
       Board.Camera,
       Board.Telemetry,

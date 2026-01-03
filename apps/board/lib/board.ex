@@ -145,12 +145,12 @@ defmodule Board do
 
   # Internal mecanum drive without telemetry (used by drive/2 which emits its own)
   defp do_mecanum_drive(vx, vy, omega) do
-    # Calculate raw motor duties using mecanum inverse kinematics
-    # Formulas account for left motor inversion
-    m1 = -vx + vy - omega
-    m2 = vx + vy - omega
-    m3 = -vx - vy - omega
-    m4 = vx - vy - omega
+    # Mecanum inverse kinematics with left motor inversion
+    # vy: strafe (positive = right), omega: rotation (positive = CCW)
+    m1 = -vx - vy - omega
+    m2 = vx - vy - omega
+    m3 = -vx + vy - omega
+    m4 = vx + vy - omega
 
     # Normalize if any motor exceeds 100% duty
     max_raw = Enum.max([abs(m1), abs(m2), abs(m3), abs(m4)])
@@ -266,6 +266,33 @@ defmodule Board do
   """
   def camera_stream_url do
     Board.Camera.stream_url()
+  end
+
+  # ---- Line Follower ----
+
+  @doc """
+  Read the 4-channel line follower sensor.
+
+  Returns `{:ok, [s1, s2, s3, s4]}` where each value is:
+  - `true` - line detected (dark surface)
+  - `false` - no line (light surface)
+
+  Sensors are numbered 1-4 from left to right when facing forward.
+
+  ## Example
+
+      {:ok, [false, true, true, false]} = Board.read_line_sensors()
+      # Sensors 2 and 3 are over the line (robot is centered)
+  """
+  def read_line_sensors do
+    Board.LineFollower.read()
+  end
+
+  @doc """
+  Check if the line follower sensor is connected.
+  """
+  def line_follower_connected? do
+    Board.LineFollower.connected?()
   end
 
   # ---- Status ----

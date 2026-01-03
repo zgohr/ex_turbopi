@@ -16,6 +16,7 @@ defmodule ExTurbopiWeb.RobotLive do
 
   @battery_poll_interval 5000
   @sonar_poll_interval 100
+  @line_poll_interval 100
   @min_safe_distance_mm 170
 
   # Default max speed for all controls
@@ -42,6 +43,7 @@ defmodule ExTurbopiWeb.RobotLive do
     if connected?(socket) do
       send(self(), :poll_battery)
       send(self(), :poll_sonar)
+      send(self(), :poll_line_sensors)
       Board.Telemetry.subscribe()
     end
 
@@ -68,6 +70,8 @@ defmodule ExTurbopiWeb.RobotLive do
         battery_voltage: nil,
         battery_percentage: nil,
         sonar_distance: nil,
+        line_sensors: [false, false, false, false],
+        line_polling: true,
         # Camera
         camera_streaming: Board.camera_streaming?(),
         camera_stream_url: Board.camera_stream_url(),
@@ -104,7 +108,7 @@ defmodule ExTurbopiWeb.RobotLive do
         <%!-- Camera with overlay controls --%>
         <div class="card bg-base-200 p-4">
           <div class="flex items-center justify-between mb-3">
-            <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2">
               <button
                 class={["btn btn-sm", (@camera_streaming && "btn-error") || "btn-success"]}
                 phx-click={if @camera_streaming, do: "stop_camera", else: "start_camera"}
@@ -115,8 +119,42 @@ defmodule ExTurbopiWeb.RobotLive do
                 />
                 {if @camera_streaming, do: "Stop", else: "Start"}
               </button>
+              <button
+                class={["btn btn-sm", (@line_polling && "btn-warning") || "btn-ghost"]}
+                phx-click="toggle_line_polling"
+                title={if @line_polling, do: "Line sensor active", else: "Line sensor off"}
+              >
+                <svg
+                  class="size-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <line x1="4" y1="20" x2="20" y2="20" />
+                  <circle
+                    cx="7"
+                    cy="17"
+                    r="2"
+                    fill={if @line_polling, do: "currentColor", else: "none"}
+                  />
+                  <circle
+                    cx="12"
+                    cy="17"
+                    r="2"
+                    fill={if @line_polling, do: "currentColor", else: "none"}
+                  />
+                  <circle
+                    cx="17"
+                    cy="17"
+                    r="2"
+                    fill={if @line_polling, do: "currentColor", else: "none"}
+                  />
+                </svg>
+                Line
+              </button>
               <span class="text-sm text-base-content/60">
-                {if @camera_streaming, do: "WS:fwd/back AD:strafe QE:rotate", else: ""}
+                {if @camera_streaming, do: "QWE ASD", else: ""}
               </span>
             </div>
             <form phx-change="set_max_speed" class="flex items-center gap-2">
@@ -164,16 +202,34 @@ defmodule ExTurbopiWeb.RobotLive do
 
             <%!-- Touch overlay controls --%>
             <div class="absolute inset-0 pointer-events-none">
-              <%!-- Drive controls (left side) --%>
+              <%!-- Drive controls (left side) - WASD + QE rotate --%>
               <div class="absolute left-4 bottom-4 pointer-events-auto touch-manipulation">
                 <div class="flex flex-col items-center gap-1">
-                  <button
-                    class="btn btn-circle btn-sm btn-ghost bg-white/20 hover:bg-white/40 backdrop-blur"
-                    phx-click="drive"
-                    phx-value-direction="forward"
-                  >
-                    <span class="text-white font-bold">W</span>
-                  </button>
+                  <%!-- Top row: Q W E --%>
+                  <div class="flex gap-1">
+                    <button
+                      class="btn btn-circle btn-sm btn-ghost bg-purple-500/40 hover:bg-purple-500/60 backdrop-blur"
+                      phx-click="drive"
+                      phx-value-direction="rotate_left"
+                    >
+                      <span class="text-white font-bold">Q</span>
+                    </button>
+                    <button
+                      class="btn btn-circle btn-sm btn-ghost bg-white/20 hover:bg-white/40 backdrop-blur"
+                      phx-click="drive"
+                      phx-value-direction="forward"
+                    >
+                      <span class="text-white font-bold">W</span>
+                    </button>
+                    <button
+                      class="btn btn-circle btn-sm btn-ghost bg-purple-500/40 hover:bg-purple-500/60 backdrop-blur"
+                      phx-click="drive"
+                      phx-value-direction="rotate_right"
+                    >
+                      <span class="text-white font-bold">E</span>
+                    </button>
+                  </div>
+                  <%!-- Middle row: A STOP D --%>
                   <div class="flex gap-1">
                     <button
                       class="btn btn-circle btn-sm btn-ghost bg-white/20 hover:bg-white/40 backdrop-blur"
@@ -196,32 +252,13 @@ defmodule ExTurbopiWeb.RobotLive do
                       <span class="text-white font-bold">D</span>
                     </button>
                   </div>
+                  <%!-- Bottom row: S --%>
                   <button
                     class="btn btn-circle btn-sm btn-ghost bg-white/20 hover:bg-white/40 backdrop-blur"
                     phx-click="drive"
                     phx-value-direction="backward"
                   >
                     <span class="text-white font-bold">S</span>
-                  </button>
-                </div>
-              </div>
-
-              <%!-- Rotate controls (bottom center) --%>
-              <div class="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-auto touch-manipulation">
-                <div class="flex gap-2">
-                  <button
-                    class="btn btn-circle btn-sm btn-ghost bg-white/20 hover:bg-white/40 backdrop-blur"
-                    phx-click="drive"
-                    phx-value-direction="rotate_left"
-                  >
-                    <.icon name="hero-arrow-uturn-left" class="size-4 text-white" />
-                  </button>
-                  <button
-                    class="btn btn-circle btn-sm btn-ghost bg-white/20 hover:bg-white/40 backdrop-blur"
-                    phx-click="drive"
-                    phx-value-direction="rotate_right"
-                  >
-                    <.icon name="hero-arrow-uturn-right" class="size-4 text-white" />
                   </button>
                 </div>
               </div>
@@ -276,6 +313,9 @@ defmodule ExTurbopiWeb.RobotLive do
                   </span>
                 </div>
               <% end %>
+
+              <%!-- Line follower indicator --%>
+              <.line_follower_indicator sensors={@line_sensors} />
             </div>
           </div>
         </div>
@@ -286,6 +326,7 @@ defmodule ExTurbopiWeb.RobotLive do
           current_voltage={@battery_voltage}
           active={@power_active}
           draw={@power_draw}
+          line_polling={@line_polling}
         />
 
         <%!-- Collapsible sections --%>
@@ -397,10 +438,36 @@ defmodule ExTurbopiWeb.RobotLive do
     """
   end
 
+  attr :sensors, :list, default: [false, false, false, false]
+
+  defp line_follower_indicator(assigns) do
+    ~H"""
+    <div class="absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-none z-10">
+      <div class="flex gap-1 px-2 py-1 rounded-full backdrop-blur bg-black/30">
+        <span class="text-white/50 text-xs mr-1">LINE</span>
+        <%= for {active, idx} <- Enum.with_index(@sensors) do %>
+          <div
+            class={[
+              "w-3 h-3 rounded-sm border transition-colors",
+              if(active,
+                do: "bg-green-400 border-green-300 shadow-[0_0_6px_rgba(74,222,128,0.6)]",
+                else: "bg-gray-600/50 border-gray-500/50"
+              )
+            ]}
+            title={"Sensor #{idx + 1}: #{if active, do: "line detected", else: "no line"}"}
+          >
+          </div>
+        <% end %>
+      </div>
+    </div>
+    """
+  end
+
   attr :history, :list, default: []
   attr :current_voltage, :integer, default: nil
   attr :active, :map, default: %{camera: false, motors: false, motor_speed: 0}
   attr :draw, :map, default: %{camera: 0, motors: 0, total: 0}
+  attr :line_polling, :boolean, default: false
 
   defp power_monitor(assigns) do
     ~H"""
@@ -424,6 +491,17 @@ defmodule ExTurbopiWeb.RobotLive do
           <span>Motors</span>
           <span class="text-xs opacity-70">
             {if @active.motors, do: "~#{@draw.motors}mA", else: "idle"}
+          </span>
+        </div>
+        <div class={["flex items-center gap-1", @line_polling && "text-success"]}>
+          <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="4" y1="20" x2="20" y2="20" />
+            <circle cx="9" cy="17" r="2" />
+            <circle cx="15" cy="17" r="2" />
+          </svg>
+          <span>Line</span>
+          <span class="text-xs opacity-70">
+            {if @line_polling, do: "~20mA", else: "off"}
           </span>
         </div>
         <%= if @draw.total > 0 do %>
@@ -519,7 +597,7 @@ defmodule ExTurbopiWeb.RobotLive do
   end
 
   # Keyboard controls - holonomic mecanum drive
-  # W/S: forward/backward, A/D: strafe left/right, Q/E: rotate
+  # W/S: forward/backward, Q/E: strafe left/right, A/D: rotate left/right
   # All can be combined for simultaneous translation + rotation
   def handle_event("keydown", %{"key" => key}, socket) do
     key = String.downcase(key)
@@ -633,6 +711,17 @@ defmodule ExTurbopiWeb.RobotLive do
     {:noreply, assign(socket, :camera_streaming, false)}
   end
 
+  def handle_event("toggle_line_polling", _params, socket) do
+    new_state = !socket.assigns.line_polling
+    socket = assign(socket, :line_polling, new_state)
+
+    # Reset sensors to off when disabled
+    socket =
+      if new_state, do: socket, else: assign(socket, :line_sensors, [false, false, false, false])
+
+    {:noreply, socket}
+  end
+
   def handle_info(:auto_stop, socket) do
     Board.stop()
     {:noreply, assign(socket, :moving, nil)}
@@ -687,16 +776,34 @@ defmodule ExTurbopiWeb.RobotLive do
     {:noreply, socket}
   end
 
+  def handle_info(:poll_line_sensors, socket) do
+    socket =
+      if socket.assigns.line_polling do
+        case Board.read_line_sensors() do
+          {:ok, sensors} ->
+            assign(socket, :line_sensors, sensors)
+
+          {:error, _} ->
+            socket
+        end
+      else
+        socket
+      end
+
+    Process.send_after(self(), :poll_line_sensors, @line_poll_interval)
+    {:noreply, socket}
+  end
+
   # Calculate velocities from pressed keys and send mecanum command
   defp update_drive_from_keys(socket) do
     keys = socket.assigns.keys_pressed
     speed = socket.assigns.max_speed
     safe_fwd = not socket_too_close?(socket)
 
-    # vx: forward/backward, vy: strafe, omega: rotation
+    # vx: forward/backward, vy: strafe (Q=left, E=right), omega: rotation (A=left, D=right)
     vx = key_velocity(keys, "w", "s", speed, safe_fwd)
-    vy = key_velocity(keys, "a", "d", speed)
-    omega = key_velocity(keys, "e", "q", speed)
+    vy = key_velocity(keys, "e", "q", speed)
+    omega = key_velocity(keys, "d", "a", speed)
 
     moving = classify_movement(vx, vy, omega)
 
