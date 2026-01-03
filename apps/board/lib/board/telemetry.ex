@@ -2,11 +2,12 @@ defmodule Board.Telemetry do
   @moduledoc """
   Collects and aggregates telemetry data for power monitoring.
 
-  Tracks:
-  - Battery voltage history (last 5 minutes)
-  - Active power consumers (camera, motors)
+  Data is aggregated into 30-second windows, tracking:
+  - Average/min/max voltage per window
+  - Motor activity (% of time motors were running)
+  - Camera activity (% of time camera was on)
 
-  Broadcasts updates via PubSub for LiveView subscriptions.
+  This provides meaningful trends over time to correlate power draw with voltage drops.
   """
 
   use GenServer
@@ -14,8 +15,12 @@ defmodule Board.Telemetry do
 
   @pubsub ExTurbopi.PubSub
   @topic "board:telemetry"
-  # 60 readings at 5s interval = 5 minutes
-  @max_history 60
+
+  # Aggregation settings
+  # 30 seconds per data point
+  @window_duration_ms 30_000
+  # 20 windows = 10 minutes of history
+  @max_history 20
 
   # Estimated current draw in mA (rough estimates)
   @camera_draw_ma 180
@@ -65,17 +70,34 @@ defmodule Board.Telemetry do
 
   @impl true
   def init(_opts) do
+    now = System.monotonic_time(:millisecond)
+
     state = %{
-      voltage_history: [],
+      # Completed 30s windows: [{timestamp, avg_voltage, motor_pct, camera_pct}, ...]
+      history: [],
+      # Current voltage reading (for live display)
       current_voltage: nil,
+      # Current window data
+      window: %{
+        start_time: now,
+        voltage_samples: [],
+        motor_active_ms: 0,
+        camera_active_ms: 0
+      },
+      # Real-time activity state
       active: %{
         camera: false,
         motors: false,
         motor_speed: 0
       },
+      # For tracking activity duration
+      last_motor_change: now,
+      last_camera_change: now,
       last_motor_command: nil
     }
 
+    # Schedule window finalization
+    schedule_window_close()
     # Schedule motor idle check
     schedule_motor_idle_check()
 
@@ -89,33 +111,61 @@ defmodule Board.Telemetry do
 
   @impl true
   def handle_cast({:battery_reading, voltage}, state) do
-    now = System.system_time(:second)
+    # Add to current window's samples
+    window = %{state.window | voltage_samples: [voltage | state.window.voltage_samples]}
+    new_state = %{state | window: window, current_voltage: voltage}
 
-    # Add to history, keeping only last N readings
-    history =
-      [{now, voltage} | state.voltage_history]
-      |> Enum.take(@max_history)
-
-    new_state = %{state | voltage_history: history, current_voltage: voltage}
+    # Broadcast for live voltage display (not full state update)
     broadcast_update(new_state)
 
     {:noreply, new_state}
   end
 
   def handle_cast({:camera_state, streaming}, state) do
-    new_state = put_in(state, [:active, :camera], streaming)
+    now = System.monotonic_time(:millisecond)
+
+    # Calculate time since last change and add to appropriate counter
+    elapsed = now - state.last_camera_change
+
+    window =
+      if state.active.camera do
+        %{state.window | camera_active_ms: state.window.camera_active_ms + elapsed}
+      else
+        state.window
+      end
+
+    new_state =
+      state
+      |> Map.put(:window, window)
+      |> put_in([:active, :camera], streaming)
+      |> Map.put(:last_camera_change, now)
+
     broadcast_update(new_state)
     {:noreply, new_state}
   end
 
   def handle_cast({:motor_command, %{direction: direction, speed: speed}}, state) do
+    now = System.monotonic_time(:millisecond)
+    was_active = state.active.motors
     is_active = direction != :stop and speed > 0
+
+    # Calculate time motors were active since last change
+    elapsed = now - state.last_motor_change
+
+    window =
+      if was_active do
+        %{state.window | motor_active_ms: state.window.motor_active_ms + elapsed}
+      else
+        state.window
+      end
 
     new_state =
       state
+      |> Map.put(:window, window)
       |> put_in([:active, :motors], is_active)
       |> put_in([:active, :motor_speed], if(is_active, do: speed, else: 0))
-      |> Map.put(:last_motor_command, System.monotonic_time(:millisecond))
+      |> Map.put(:last_motor_change, now)
+      |> Map.put(:last_motor_command, now)
 
     broadcast_update(new_state)
     {:noreply, new_state}
@@ -126,7 +176,74 @@ defmodule Board.Telemetry do
   end
 
   @impl true
+  def handle_info(:close_window, state) do
+    now = System.monotonic_time(:millisecond)
+    window_duration = now - state.window.start_time
+
+    # Finalize any ongoing activity into the window
+    motor_active_ms =
+      if state.active.motors do
+        state.window.motor_active_ms + (now - state.last_motor_change)
+      else
+        state.window.motor_active_ms
+      end
+
+    camera_active_ms =
+      if state.active.camera do
+        state.window.camera_active_ms + (now - state.last_camera_change)
+      else
+        state.window.camera_active_ms
+      end
+
+    # Calculate window stats
+    window_entry =
+      if length(state.window.voltage_samples) > 0 do
+        avg_voltage =
+          Enum.sum(state.window.voltage_samples) / length(state.window.voltage_samples)
+
+        motor_pct = round(motor_active_ms / window_duration * 100)
+        camera_pct = round(camera_active_ms / window_duration * 100)
+
+        %{
+          timestamp: System.system_time(:second),
+          voltage: round(avg_voltage),
+          motor_pct: motor_pct,
+          camera_pct: camera_pct
+        }
+      else
+        nil
+      end
+
+    # Add to history if we have data
+    history =
+      if window_entry do
+        [window_entry | state.history] |> Enum.take(@max_history)
+      else
+        state.history
+      end
+
+    # Reset window
+    new_state = %{
+      state
+      | history: history,
+        window: %{
+          start_time: now,
+          voltage_samples: [],
+          motor_active_ms: 0,
+          camera_active_ms: 0
+        },
+        last_motor_change: now,
+        last_camera_change: now
+    }
+
+    broadcast_update(new_state)
+    schedule_window_close()
+    {:noreply, new_state}
+  end
+
   def handle_info(:check_motor_idle, state) do
+    now = System.monotonic_time(:millisecond)
+
     # If no motor command in last 500ms, consider motors idle
     new_state =
       case state.last_motor_command do
@@ -134,13 +251,21 @@ defmodule Board.Telemetry do
           state
 
         last_time ->
-          now = System.monotonic_time(:millisecond)
-
           if now - last_time > 500 and state.active.motors do
+            # Record the motor time before marking idle
+            elapsed = now - state.last_motor_change
+
+            window = %{
+              state.window
+              | motor_active_ms: state.window.motor_active_ms + elapsed
+            }
+
             updated =
               state
+              |> Map.put(:window, window)
               |> put_in([:active, :motors], false)
               |> put_in([:active, :motor_speed], 0)
+              |> Map.put(:last_motor_change, now)
 
             broadcast_update(updated)
             updated
@@ -154,6 +279,10 @@ defmodule Board.Telemetry do
   end
 
   # Private Functions
+
+  defp schedule_window_close do
+    Process.send_after(self(), :close_window, @window_duration_ms)
+  end
 
   defp schedule_motor_idle_check do
     Process.send_after(self(), :check_motor_idle, 500)
@@ -170,9 +299,13 @@ defmodule Board.Telemetry do
 
   defp build_public_state(state) do
     %{
-      voltage_history: state.voltage_history,
+      # For graph: list of %{timestamp, voltage, motor_pct, camera_pct}
+      history: state.history,
+      # Current voltage for live display
       current_voltage: state.current_voltage,
+      # Current activity state
       active: state.active,
+      # Estimated instantaneous draw
       estimated_draw: calculate_draw(state.active)
     }
   end

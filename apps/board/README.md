@@ -94,10 +94,13 @@ Stream URL: `http://<pi-ip>:5000/stream`
 
 Collects and broadcasts power usage telemetry for the LiveView dashboard.
 
-Tracks:
-- Battery voltage history (last 5 minutes)
-- Active power consumers (camera, motors)
-- Estimated current draw
+Data is aggregated into 30-second windows, tracking:
+- Average voltage per window
+- Motor activity (% of time motors were running)
+- Camera activity (% of time camera was on)
+- 20 windows = 10 minutes of history
+
+This allows correlating voltage drops with motor/camera usage.
 
 ```elixir
 Board.Telemetry.subscribe()   # Subscribe to PubSub updates

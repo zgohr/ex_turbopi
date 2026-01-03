@@ -24,8 +24,8 @@ defmodule ExTurbopiWeb.RobotLive do
   @friction 3
   # speed units per tick when braking
   @brake_decel 12
-  # matches speed slider max
-  @max_speed 50
+  # default max speed
+  @default_max_speed 50
 
   def mount(_params, _session, socket) do
     if connected?(socket) do
@@ -50,7 +50,7 @@ defmodule ExTurbopiWeb.RobotLive do
       |> assign(:tilt_max, @tilt_max)
       |> assign(:gimbal_step, @gimbal_step)
       |> assign(:leds, Board.LEDs.get_all())
-      |> assign(:speed, 25)
+      |> assign(:max_speed, @default_max_speed)
       |> assign(:moving, nil)
       |> assign(:keys_pressed, MapSet.new())
       # Physics state
@@ -64,8 +64,8 @@ defmodule ExTurbopiWeb.RobotLive do
       |> assign(:camera_streaming, Board.camera_streaming?())
       |> assign(:camera_stream_url, Board.camera_stream_url())
       |> assign(:sonar_distance, nil)
-      # Telemetry state
-      |> assign(:voltage_history, telemetry.voltage_history)
+      # Telemetry state (30s aggregated windows)
+      |> assign(:telemetry_history, telemetry.history)
       |> assign(:power_active, telemetry.active)
       |> assign(:power_draw, telemetry.estimated_draw)
 
@@ -111,17 +111,17 @@ defmodule ExTurbopiWeb.RobotLive do
                 {if @camera_streaming, do: "WASD: drive | Arrows: gimbal", else: ""}
               </span>
             </div>
-            <form phx-change="set_speed" class="flex items-center gap-2">
-              <span class="text-sm">Speed:</span>
+            <form phx-change="set_max_speed" class="flex items-center gap-2">
+              <span class="text-sm">Max:</span>
               <input
                 type="range"
                 min="10"
-                max="50"
-                value={@speed}
+                max="100"
+                value={@max_speed}
                 class="range range-xs w-24"
-                name="speed"
+                name="max_speed"
               />
-              <span class="text-sm w-8">{@speed}%</span>
+              <span class="text-sm w-8">{@max_speed}%</span>
             </form>
           </div>
 
@@ -274,7 +274,7 @@ defmodule ExTurbopiWeb.RobotLive do
 
         <%!-- Power Monitor --%>
         <.power_monitor
-          voltage_history={@voltage_history}
+          history={@telemetry_history}
           current_voltage={@battery_voltage}
           active={@power_active}
           draw={@power_draw}
@@ -394,7 +394,7 @@ defmodule ExTurbopiWeb.RobotLive do
     """
   end
 
-  attr :voltage_history, :list, default: []
+  attr :history, :list, default: []
   attr :current_voltage, :integer, default: nil
   attr :active, :map, default: %{camera: false, motors: false, motor_speed: 0}
   attr :draw, :map, default: %{camera: 0, motors: 0, total: 0}
@@ -402,11 +402,14 @@ defmodule ExTurbopiWeb.RobotLive do
   defp power_monitor(assigns) do
     ~H"""
     <div class="card bg-base-200 p-4">
-      <h3 class="font-medium mb-3">Power Monitor</h3>
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-medium">Power Monitor</h3>
+        <span class="text-xs text-base-content/50">30s intervals • 10min history</span>
+      </div>
 
       <%!-- Active consumers with estimated draw --%>
       <div class="flex flex-wrap gap-4 text-sm mb-3">
-        <div class={["flex items-center gap-1", @active.camera && "text-warning"]}>
+        <div class={["flex items-center gap-1", @active.camera && "text-info"]}>
           <.icon name="hero-video-camera" class="size-4" />
           <span>Camera</span>
           <span class="text-xs opacity-70">
@@ -423,75 +426,154 @@ defmodule ExTurbopiWeb.RobotLive do
         <%= if @draw.total > 0 do %>
           <div class="flex items-center gap-1 text-error">
             <.icon name="hero-bolt" class="size-4" />
-            <span>Total: ~{@draw.total}mA</span>
+            <span>~{@draw.total}mA</span>
           </div>
         <% end %>
       </div>
 
-      <%!-- Voltage sparkline --%>
-      <div class="h-16 bg-base-300 rounded relative overflow-hidden">
-        <%= if length(@voltage_history) > 1 do %>
-          <svg viewBox="0 0 100 40" preserveAspectRatio="none" class="w-full h-full">
-            <polyline
-              points={voltage_sparkline(@voltage_history)}
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.5"
-              class={sparkline_color(@current_voltage)}
-            />
-          </svg>
+      <%!-- Main chart area --%>
+      <div class="bg-base-300 rounded p-2">
+        <%= if length(@history) >= 2 do %>
+          <div class="h-24 relative">
+            <svg viewBox="0 0 200 100" preserveAspectRatio="none" class="w-full h-full">
+              <%!-- Activity bars (bottom layer) --%>
+              <%= for {entry, idx} <- Enum.with_index(Enum.reverse(@history)) do %>
+                <% bar_width = 200 / max(length(@history), 1) %>
+                <% x = idx * bar_width %>
+                <%!-- Motor activity bar (orange) --%>
+                <rect
+                  x={x}
+                  y={100 - entry.motor_pct}
+                  width={bar_width - 1}
+                  height={entry.motor_pct}
+                  class="fill-warning/40"
+                />
+                <%!-- Camera activity bar (blue, stacked) --%>
+                <rect
+                  x={x}
+                  y={100 - entry.motor_pct - entry.camera_pct}
+                  width={bar_width - 1}
+                  height={entry.camera_pct}
+                  class="fill-info/40"
+                />
+              <% end %>
+
+              <%!-- Voltage line (top layer) --%>
+              <polyline
+                points={voltage_line(@history)}
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                class={voltage_line_color(@current_voltage)}
+              />
+
+              <%!-- Voltage dots --%>
+              <%= for {entry, idx} <- Enum.with_index(Enum.reverse(@history)) do %>
+                <% {_x, y} = voltage_point(@history, idx) %>
+                <circle
+                  cx={idx * (200 / max(length(@history) - 1, 1))}
+                  cy={y}
+                  r="3"
+                  class={"fill-current " <> voltage_line_color(entry.voltage)}
+                />
+              <% end %>
+            </svg>
+
+            <%!-- Y-axis labels --%>
+            <div class="absolute left-0 top-0 bottom-0 flex flex-col justify-between text-xs text-base-content/50 -ml-1 pointer-events-none">
+              <span>{format_voltage_label(@history, :max)}</span>
+              <span>{format_voltage_label(@history, :min)}</span>
+            </div>
+
+            <%!-- 100% activity line --%>
+            <div class="absolute right-0 top-0 text-xs text-base-content/30">100%</div>
+          </div>
+
+          <%!-- Legend and time axis --%>
+          <div class="flex justify-between items-center mt-2 text-xs">
+            <div class="flex gap-3 text-base-content/60">
+              <span class="flex items-center gap-1">
+                <span class="w-3 h-2 bg-warning/40 rounded-sm"></span> Motors
+              </span>
+              <span class="flex items-center gap-1">
+                <span class="w-3 h-2 bg-info/40 rounded-sm"></span> Camera
+              </span>
+              <span class="flex items-center gap-1">
+                <span class="w-3 h-0.5 bg-success rounded"></span> Voltage
+              </span>
+            </div>
+            <span class="text-base-content/50">
+              <%= if @current_voltage do %>
+                {Float.round(@current_voltage / 1000, 2)}V
+              <% else %>
+                --
+              <% end %>
+            </span>
+          </div>
         <% else %>
-          <div class="absolute inset-0 flex items-center justify-center text-base-content/30 text-sm">
-            Collecting data...
+          <div class="h-24 flex items-center justify-center text-base-content/30 text-sm">
+            <div class="text-center">
+              <div>Collecting data...</div>
+              <div class="text-xs mt-1">First point in ~30s</div>
+            </div>
           </div>
         <% end %>
-      </div>
-      <div class="flex justify-between text-xs text-base-content/50 mt-1">
-        <span>5m ago</span>
-        <span>
-          <%= if @current_voltage do %>
-            {Float.round(@current_voltage / 1000, 2)}V
-          <% else %>
-            --
-          <% end %>
-        </span>
       </div>
     </div>
     """
   end
 
-  defp voltage_sparkline(history) when length(history) < 2, do: ""
+  defp voltage_line(history) when length(history) < 2, do: ""
 
-  defp voltage_sparkline(history) do
-    # Get min/max for scaling
-    voltages = Enum.map(history, fn {_ts, v} -> v end)
-    min_v = Enum.min(voltages)
-    max_v = Enum.max(voltages)
-
-    # Add some padding to the range
-    # At least 100mV range
-    range = max(max_v - min_v, 100)
-    min_v = min_v - 50
-    max_v = min_v + range + 100
-
-    # Reverse so oldest is first (left side of graph)
-    history = Enum.reverse(history)
-    count = length(history)
+  defp voltage_line(history) do
+    voltages = Enum.map(history, & &1.voltage)
+    {min_v, max_v} = voltage_range(voltages)
 
     history
+    |> Enum.reverse()
     |> Enum.with_index()
-    |> Enum.map(fn {{_ts, voltage}, idx} ->
-      x = idx / max(count - 1, 1) * 100
-      y = 40 - (voltage - min_v) / (max_v - min_v) * 40
+    |> Enum.map(fn {entry, idx} ->
+      x = idx * (200 / max(length(history) - 1, 1))
+      y = 100 - (entry.voltage - min_v) / max(max_v - min_v, 1) * 80 - 10
       "#{Float.round(x, 1)},#{Float.round(y, 1)}"
     end)
     |> Enum.join(" ")
   end
 
-  defp sparkline_color(nil), do: "text-base-content/50"
-  defp sparkline_color(mv) when mv >= 7400, do: "text-success"
-  defp sparkline_color(mv) when mv >= 6800, do: "text-warning"
-  defp sparkline_color(_mv), do: "text-error"
+  defp voltage_point(history, idx) do
+    voltages = Enum.map(history, & &1.voltage)
+    {min_v, max_v} = voltage_range(voltages)
+    entry = Enum.at(Enum.reverse(history), idx)
+    x = idx * (200 / max(length(history) - 1, 1))
+    y = 100 - (entry.voltage - min_v) / max(max_v - min_v, 1) * 80 - 10
+    {x, y}
+  end
+
+  defp voltage_range(voltages) do
+    min_v = Enum.min(voltages)
+    max_v = Enum.max(voltages)
+    # Ensure at least 200mV range for readability
+    range = max(max_v - min_v, 200)
+    padding = 100
+    {min_v - padding, min_v + range + padding}
+  end
+
+  defp format_voltage_label(history, :max) do
+    voltages = Enum.map(history, & &1.voltage)
+    {_min_v, max_v} = voltage_range(voltages)
+    "#{Float.round(max_v / 1000, 1)}V"
+  end
+
+  defp format_voltage_label(history, :min) do
+    voltages = Enum.map(history, & &1.voltage)
+    {min_v, _max_v} = voltage_range(voltages)
+    "#{Float.round(min_v / 1000, 1)}V"
+  end
+
+  defp voltage_line_color(nil), do: "text-base-content/50"
+  defp voltage_line_color(mv) when mv >= 7400, do: "text-success"
+  defp voltage_line_color(mv) when mv >= 6800, do: "text-warning"
+  defp voltage_line_color(_mv), do: "text-error"
 
   # Keyboard controls - track pressed keys for combined movement
   def handle_event("keydown", %{"key" => key}, socket) do
@@ -555,7 +637,7 @@ defmodule ExTurbopiWeb.RobotLive do
   # Touch/click controls
   def handle_event("drive", %{"direction" => direction}, socket) do
     direction = String.to_existing_atom(direction)
-    Board.drive(direction, socket.assigns.speed)
+    Board.drive(direction, socket.assigns.max_speed)
     Process.send_after(self(), :auto_stop, 500)
     {:noreply, assign(socket, :moving, direction)}
   end
@@ -565,9 +647,9 @@ defmodule ExTurbopiWeb.RobotLive do
     {:noreply, assign(socket, :moving, nil)}
   end
 
-  def handle_event("set_speed", %{"speed" => speed}, socket) do
-    speed = String.to_integer(speed)
-    {:noreply, assign(socket, :speed, speed)}
+  def handle_event("set_max_speed", %{"max_speed" => max_speed}, socket) do
+    max_speed = String.to_integer(max_speed)
+    {:noreply, assign(socket, :max_speed, max_speed)}
   end
 
   def handle_event("gimbal_step", %{"direction" => direction}, socket) do
@@ -632,7 +714,7 @@ defmodule ExTurbopiWeb.RobotLive do
   def handle_info({:telemetry_update, telemetry}, socket) do
     socket =
       socket
-      |> assign(:voltage_history, telemetry.voltage_history)
+      |> assign(:telemetry_history, telemetry.history)
       |> assign(:power_active, telemetry.active)
       |> assign(:power_draw, telemetry.estimated_draw)
 
@@ -682,6 +764,8 @@ defmodule ExTurbopiWeb.RobotLive do
   def handle_info(:physics_tick, socket) do
     keys = socket.assigns.keys_pressed
     velocity = socket.assigns.velocity
+    prev_moving = socket.assigns.moving
+    max_speed = socket.assigns.max_speed
 
     w = MapSet.member?(keys, "w")
     s = MapSet.member?(keys, "s")
@@ -694,11 +778,13 @@ defmodule ExTurbopiWeb.RobotLive do
     socket =
       cond do
         q ->
-          Board.drive(:rotate_left, @max_speed)
+          # Only send if not already rotating left
+          if prev_moving != :rotate_left, do: Board.drive(:rotate_left, max_speed)
           assign(socket, :moving, :rotate_left)
 
         e ->
-          Board.drive(:rotate_right, @max_speed)
+          # Only send if not already rotating right
+          if prev_moving != :rotate_right, do: Board.drive(:rotate_right, max_speed)
           assign(socket, :moving, :rotate_right)
 
         true ->
@@ -707,10 +793,10 @@ defmodule ExTurbopiWeb.RobotLive do
             cond do
               # W accelerates forward, or brakes if going backward
               w and velocity < 0 -> velocity + @brake_decel
-              w -> min(velocity + @acceleration, @max_speed)
+              w -> min(velocity + @acceleration, max_speed)
               # S accelerates backward, or brakes if going forward
               s and velocity > 0 -> velocity - @brake_decel
-              s -> max(velocity - @acceleration, -@max_speed)
+              s -> max(velocity - @acceleration, -max_speed)
               # No W/S - coast toward zero (friction)
               velocity > 0 -> max(velocity - @friction, 0)
               velocity < 0 -> min(velocity + @friction, 0)
@@ -735,17 +821,27 @@ defmodule ExTurbopiWeb.RobotLive do
 
           # Determine direction and send motor command
           {direction, abs_speed} = velocity_to_direction(new_velocity, new_steering)
+          new_moving = if(abs_speed > 0, do: direction, else: nil)
 
-          if direction == :stop or abs_speed == 0 do
-            Board.stop()
-          else
-            Board.drive(direction, abs_speed)
+          # Only send commands when state changes or when actively moving
+          cond do
+            # Just stopped - send stop once
+            new_moving == nil and prev_moving != nil ->
+              Board.stop()
+
+            # Moving - send command (speed might be changing)
+            new_moving != nil ->
+              Board.drive(direction, abs_speed)
+
+            # Already stopped - don't send anything
+            true ->
+              :ok
           end
 
           socket
           |> assign(:velocity, new_velocity)
           |> assign(:steering, new_steering)
-          |> assign(:moving, if(abs_speed > 0, do: direction, else: nil))
+          |> assign(:moving, new_moving)
       end
 
     Process.send_after(self(), :physics_tick, @physics_tick_ms)

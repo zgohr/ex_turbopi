@@ -9,7 +9,7 @@ Elixir/Phoenix replacement for the ROS2 Docker stack on Hiwonder TurboPi robot.
 - Gimbal pan/tilt control (arrow keys)
 - Live camera streaming (MJPEG) with distance HUD overlay
 - Collision avoidance (auto-stops at 17cm from obstacles)
-- Power monitor with voltage history graph
+- Power monitor with voltage graph and activity correlation (30s windows, 10min history)
 - 4 RGB LEDs with state persistence: 2 on main board + 2 on ultrasonic sensor
 - Ultrasonic distance sensor
 - Battery voltage monitoring
@@ -106,6 +106,7 @@ ex_turbopi_umbrella/
 - Press opposite direction (S while moving forward) to brake
 - Reverse steering is inverted like a real car
 - Auto-stops at 17cm from obstacles
+- Max speed slider (10-100%) limits top speed for all controls
 
 ## Hardware API
 
