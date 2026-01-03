@@ -1,6 +1,8 @@
 defmodule ExTurbopiWeb.RobotLive do
   use ExTurbopiWeb, :live_view
 
+  import ExTurbopiWeb.RobotLive.Helpers
+
   @default_pan 1500
   @default_tilt 1500
   # Pan range (left/right)
@@ -19,41 +21,61 @@ defmodule ExTurbopiWeb.RobotLive do
   # Default max speed for all controls
   @default_max_speed 50
 
+  # LED color presets
+  @led_presets %{
+    "red" => %{r: 255, g: 0, b: 0},
+    "green" => %{r: 0, g: 255, b: 0},
+    "blue" => %{r: 0, g: 0, b: 255},
+    "yellow" => %{r: 255, g: 255, b: 0},
+    "off" => %{r: 0, g: 0, b: 0}
+  }
+
+  # LED hardware mappings
+  @led_handlers %{
+    sonar1: {Board.Sonar, :set_pixel, 0},
+    sonar2: {Board.Sonar, :set_pixel, 1},
+    board1: {Board, :set_rgb, 1},
+    board2: {Board, :set_rgb, 2}
+  }
+
   def mount(_params, _session, socket) do
     if connected?(socket) do
       send(self(), :poll_battery)
       send(self(), :poll_sonar)
-      # Subscribe to telemetry updates
       Board.Telemetry.subscribe()
     end
 
-    # Get initial telemetry state
     telemetry = Board.Telemetry.get_state()
 
     socket =
-      socket
-      |> assign(:connected, Board.connected?())
-      |> assign(:pan, @default_pan)
-      |> assign(:tilt, @default_tilt)
-      |> assign(:pan_min, @pan_min)
-      |> assign(:pan_max, @pan_max)
-      |> assign(:tilt_min, @tilt_min)
-      |> assign(:tilt_max, @tilt_max)
-      |> assign(:gimbal_step, @gimbal_step)
-      |> assign(:leds, Board.LEDs.get_all())
-      |> assign(:max_speed, @default_max_speed)
-      |> assign(:moving, nil)
-      |> assign(:keys_pressed, MapSet.new())
-      |> assign(:leds_expanded, false)
-      |> assign(:battery_voltage, nil)
-      |> assign(:battery_percentage, nil)
-      |> assign(:camera_streaming, Board.camera_streaming?())
-      |> assign(:camera_stream_url, Board.camera_stream_url())
-      |> assign(:sonar_distance, nil)
-      # Telemetry state (30s aggregated windows)
-      |> assign(:telemetry_history, telemetry.history)
-      |> assign(:power_active, telemetry.active)
-      |> assign(:power_draw, telemetry.estimated_draw)
+      assign(socket,
+        connected: Board.connected?(),
+        # Gimbal
+        pan: @default_pan,
+        tilt: @default_tilt,
+        pan_min: @pan_min,
+        pan_max: @pan_max,
+        tilt_min: @tilt_min,
+        tilt_max: @tilt_max,
+        gimbal_step: @gimbal_step,
+        # Controls
+        leds: Board.LEDs.get_all(),
+        max_speed: @default_max_speed,
+        moving: nil,
+        keys_pressed: MapSet.new(),
+        leds_expanded: false,
+        # Sensors
+        battery_voltage: nil,
+        battery_percentage: nil,
+        sonar_distance: nil,
+        # Camera
+        camera_streaming: Board.camera_streaming?(),
+        camera_stream_url: Board.camera_stream_url(),
+        # Telemetry (30s windows)
+        telemetry_history: telemetry.history,
+        power_active: telemetry.active,
+        power_draw: telemetry.estimated_draw
+      )
 
     {:ok, socket}
   end
@@ -322,11 +344,6 @@ defmodule ExTurbopiWeb.RobotLive do
     """
   end
 
-  defp battery_color(nil), do: "badge-ghost"
-  defp battery_color(pct) when pct > 50, do: "badge-success"
-  defp battery_color(pct) when pct > 20, do: "badge-warning"
-  defp battery_color(_pct), do: "badge-error"
-
   attr :id, :string, required: true
   attr :label, :string, required: true
   attr :rgb, :map, required: true
@@ -419,24 +436,22 @@ defmodule ExTurbopiWeb.RobotLive do
 
       <%!-- Main chart area --%>
       <div class="bg-base-300 rounded p-2">
-        <%= if length(@history) >= 2 do %>
+        <% chart = voltage_chart_data(@history) %>
+        <%= if chart do %>
           <div class="h-24 relative">
             <svg viewBox="0 0 200 100" preserveAspectRatio="none" class="w-full h-full">
               <%!-- Activity bars (bottom layer) --%>
+              <% bar_width = 200 / max(length(@history), 1) %>
               <%= for {entry, idx} <- Enum.with_index(Enum.reverse(@history)) do %>
-                <% bar_width = 200 / max(length(@history), 1) %>
-                <% x = idx * bar_width %>
-                <%!-- Motor activity bar (orange) --%>
                 <rect
-                  x={x}
+                  x={idx * bar_width}
                   y={100 - entry.motor_pct}
                   width={bar_width - 1}
                   height={entry.motor_pct}
                   class="fill-warning/40"
                 />
-                <%!-- Camera activity bar (blue, stacked) --%>
                 <rect
-                  x={x}
+                  x={idx * bar_width}
                   y={100 - entry.motor_pct - entry.camera_pct}
                   width={bar_width - 1}
                   height={entry.camera_pct}
@@ -446,7 +461,7 @@ defmodule ExTurbopiWeb.RobotLive do
 
               <%!-- Voltage line (top layer) --%>
               <polyline
-                points={voltage_line(@history)}
+                points={chart.line}
                 fill="none"
                 stroke="currentColor"
                 stroke-width="2"
@@ -454,21 +469,15 @@ defmodule ExTurbopiWeb.RobotLive do
               />
 
               <%!-- Voltage dots --%>
-              <%= for {entry, idx} <- Enum.with_index(Enum.reverse(@history)) do %>
-                <% {_x, y} = voltage_point(@history, idx) %>
-                <circle
-                  cx={idx * (200 / max(length(@history) - 1, 1))}
-                  cy={y}
-                  r="3"
-                  class={"fill-current " <> voltage_line_color(entry.voltage)}
-                />
+              <%= for {x, y, voltage} <- chart.points do %>
+                <circle cx={x} cy={y} r="3" class={"fill-current " <> voltage_line_color(voltage)} />
               <% end %>
             </svg>
 
             <%!-- Y-axis labels --%>
             <div class="absolute left-0 top-0 bottom-0 flex flex-col justify-between text-xs text-base-content/50 -ml-1 pointer-events-none">
-              <span>{format_voltage_label(@history, :max)}</span>
-              <span>{format_voltage_label(@history, :min)}</span>
+              <span>{chart.max_label}</span>
+              <span>{chart.min_label}</span>
             </div>
 
             <%!-- 100% activity line --%>
@@ -508,58 +517,6 @@ defmodule ExTurbopiWeb.RobotLive do
     </div>
     """
   end
-
-  defp voltage_line(history) when length(history) < 2, do: ""
-
-  defp voltage_line(history) do
-    voltages = Enum.map(history, & &1.voltage)
-    {min_v, max_v} = voltage_range(voltages)
-
-    history
-    |> Enum.reverse()
-    |> Enum.with_index()
-    |> Enum.map(fn {entry, idx} ->
-      x = idx * (200 / max(length(history) - 1, 1))
-      y = 100 - (entry.voltage - min_v) / max(max_v - min_v, 1) * 80 - 10
-      "#{Float.round(x, 1)},#{Float.round(y, 1)}"
-    end)
-    |> Enum.join(" ")
-  end
-
-  defp voltage_point(history, idx) do
-    voltages = Enum.map(history, & &1.voltage)
-    {min_v, max_v} = voltage_range(voltages)
-    entry = Enum.at(Enum.reverse(history), idx)
-    x = idx * (200 / max(length(history) - 1, 1))
-    y = 100 - (entry.voltage - min_v) / max(max_v - min_v, 1) * 80 - 10
-    {x, y}
-  end
-
-  defp voltage_range(voltages) do
-    min_v = Enum.min(voltages)
-    max_v = Enum.max(voltages)
-    # Ensure at least 200mV range for readability
-    range = max(max_v - min_v, 200)
-    padding = 100
-    {min_v - padding, min_v + range + padding}
-  end
-
-  defp format_voltage_label(history, :max) do
-    voltages = Enum.map(history, & &1.voltage)
-    {_min_v, max_v} = voltage_range(voltages)
-    "#{Float.round(max_v / 1000, 1)}V"
-  end
-
-  defp format_voltage_label(history, :min) do
-    voltages = Enum.map(history, & &1.voltage)
-    {min_v, _max_v} = voltage_range(voltages)
-    "#{Float.round(min_v / 1000, 1)}V"
-  end
-
-  defp voltage_line_color(nil), do: "text-base-content/50"
-  defp voltage_line_color(mv) when mv >= 7400, do: "text-success"
-  defp voltage_line_color(mv) when mv >= 6800, do: "text-warning"
-  defp voltage_line_color(_mv), do: "text-error"
 
   # Keyboard controls - holonomic mecanum drive
   # W/S: forward/backward, A/D: strafe left/right, Q/E: rotate
@@ -638,19 +595,9 @@ defmodule ExTurbopiWeb.RobotLive do
 
   def handle_event("led_preset", %{"led" => led_id, "color" => color}, socket) do
     led_key = String.to_existing_atom(led_id)
-
-    rgb =
-      case color do
-        "red" -> %{r: 255, g: 0, b: 0}
-        "green" -> %{r: 0, g: 255, b: 0}
-        "blue" -> %{r: 0, g: 0, b: 255}
-        "yellow" -> %{r: 255, g: 255, b: 0}
-        "off" -> %{r: 0, g: 0, b: 0}
-      end
-
+    rgb = Map.fetch!(@led_presets, color)
     set_led(led_key, rgb)
-    leds = Map.put(socket.assigns.leds, led_key, rgb)
-    {:noreply, assign(socket, :leds, leds)}
+    {:noreply, assign(socket, :leds, Map.put(socket.assigns.leds, led_key, rgb))}
   end
 
   def handle_event("beep", _params, socket) do
@@ -744,56 +691,20 @@ defmodule ExTurbopiWeb.RobotLive do
   defp update_drive_from_keys(socket) do
     keys = socket.assigns.keys_pressed
     speed = socket.assigns.max_speed
+    safe_fwd = not socket_too_close?(socket)
 
-    # Calculate velocity components from pressed keys
-    # vx: forward/backward, vy: strafe left/right, omega: rotation
-    vx =
-      cond do
-        MapSet.member?(keys, "w") and not too_close?(socket) -> speed
-        MapSet.member?(keys, "s") -> -speed
-        true -> 0
-      end
+    # vx: forward/backward, vy: strafe, omega: rotation
+    vx = key_velocity(keys, "w", "s", speed, safe_fwd)
+    vy = key_velocity(keys, "a", "d", speed)
+    omega = key_velocity(keys, "e", "q", speed)
 
-    vy =
-      cond do
-        MapSet.member?(keys, "a") -> speed
-        MapSet.member?(keys, "d") -> -speed
-        true -> 0
-      end
+    moving = classify_movement(vx, vy, omega)
 
-    omega =
-      cond do
-        MapSet.member?(keys, "q") -> -speed
-        MapSet.member?(keys, "e") -> speed
-        true -> 0
-      end
-
-    # Determine what we're doing for the UI indicator
-    moving =
-      cond do
-        vx == 0 and vy == 0 and omega == 0 -> nil
-        omega != 0 and vx == 0 and vy == 0 -> if(omega > 0, do: :rotate_right, else: :rotate_left)
-        vx != 0 and vy == 0 and omega == 0 -> if(vx > 0, do: :forward, else: :backward)
-        vy != 0 and vx == 0 and omega == 0 -> if(vy > 0, do: :left, else: :right)
-        true -> :mecanum
-      end
-
-    # Send the command
-    if moving do
-      Board.mecanum_drive(vx, vy, omega)
-    else
-      Board.stop()
-    end
-
+    if moving, do: Board.mecanum_drive(vx, vy, omega), else: Board.stop()
     assign(socket, :moving, moving)
   end
 
-  defp too_close?(socket) do
-    case socket.assigns.sonar_distance do
-      nil -> false
-      distance -> distance < @min_safe_distance_mm
-    end
-  end
+  defp socket_too_close?(%{assigns: %{sonar_distance: d}}), do: too_close?(d)
 
   defp gimbal_step(direction, socket) do
     step = socket.assigns.gimbal_step
@@ -823,22 +734,10 @@ defmodule ExTurbopiWeb.RobotLive do
     |> assign(:tilt, new_tilt)
   end
 
-  defp set_led(:sonar1, %{r: r, g: g, b: b}), do: Board.Sonar.set_pixel(0, r, g, b)
-  defp set_led(:sonar2, %{r: r, g: g, b: b}), do: Board.Sonar.set_pixel(1, r, g, b)
-  defp set_led(:board1, %{r: r, g: g, b: b}), do: Board.set_rgb(1, r, g, b)
-  defp set_led(:board2, %{r: r, g: g, b: b}), do: Board.set_rgb(2, r, g, b)
-
-  defp voltage_to_percentage(mv) when mv >= 8400, do: 100
-  defp voltage_to_percentage(mv) when mv <= 6000, do: 0
-  defp voltage_to_percentage(mv), do: round((mv - 6000) / (8400 - 6000) * 100)
-
-  defp format_distance(mm) when mm >= 1000, do: "#{Float.round(mm / 10, 0) |> trunc()} cm"
-  defp format_distance(mm), do: "#{Float.round(mm / 10, 1)} cm"
-
-  defp distance_hud_class(nil), do: "bg-black/50 text-white/50"
-  defp distance_hud_class(mm) when mm < 150, do: "bg-red-500/80 text-white"
-  defp distance_hud_class(mm) when mm < 300, do: "bg-yellow-500/80 text-black"
-  defp distance_hud_class(_mm), do: "bg-green-500/60 text-white"
+  defp set_led(led_key, %{r: r, g: g, b: b}) do
+    {module, func, id} = Map.fetch!(@led_handlers, led_key)
+    apply(module, func, [id, r, g, b])
+  end
 
   # Mario theme intro: E5 E5 E5 C5 E5 G5 G4
   defp play_mario_intro do
