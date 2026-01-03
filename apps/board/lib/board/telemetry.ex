@@ -122,50 +122,34 @@ defmodule Board.Telemetry do
   end
 
   def handle_cast({:camera_state, streaming}, state) do
-    now = System.monotonic_time(:millisecond)
-
-    # Calculate time since last change and add to appropriate counter
-    elapsed = now - state.last_camera_change
-
-    window =
-      if state.active.camera do
-        %{state.window | camera_active_ms: state.window.camera_active_ms + elapsed}
-      else
-        state.window
-      end
-
     new_state =
-      state
-      |> Map.put(:window, window)
-      |> put_in([:active, :camera], streaming)
-      |> Map.put(:last_camera_change, now)
+      update_activity(
+        state,
+        :camera,
+        streaming,
+        :last_camera_change,
+        fn active -> active.camera end,
+        fn window, elapsed -> %{window | camera_active_ms: window.camera_active_ms + elapsed} end
+      )
 
     broadcast_update(new_state)
     {:noreply, new_state}
   end
 
   def handle_cast({:motor_command, %{direction: direction, speed: speed}}, state) do
-    now = System.monotonic_time(:millisecond)
-    was_active = state.active.motors
     is_active = direction != :stop and speed > 0
-
-    # Calculate time motors were active since last change
-    elapsed = now - state.last_motor_change
-
-    window =
-      if was_active do
-        %{state.window | motor_active_ms: state.window.motor_active_ms + elapsed}
-      else
-        state.window
-      end
 
     new_state =
       state
-      |> Map.put(:window, window)
-      |> put_in([:active, :motors], is_active)
+      |> update_activity(
+        :motors,
+        is_active,
+        :last_motor_change,
+        fn active -> active.motors end,
+        fn window, elapsed -> %{window | motor_active_ms: window.motor_active_ms + elapsed} end
+      )
       |> put_in([:active, :motor_speed], if(is_active, do: speed, else: 0))
-      |> Map.put(:last_motor_change, now)
-      |> Map.put(:last_motor_command, now)
+      |> Map.put(:last_motor_command, System.monotonic_time(:millisecond))
 
     broadcast_update(new_state)
     {:noreply, new_state}
@@ -279,6 +263,31 @@ defmodule Board.Telemetry do
   end
 
   # Private Functions
+
+  defp update_activity(
+         state,
+         activity_key,
+         is_active,
+         last_change_key,
+         was_active_fn,
+         window_update_fn
+       ) do
+    now = System.monotonic_time(:millisecond)
+    was_active = was_active_fn.(state.active)
+    elapsed = now - Map.get(state, last_change_key)
+
+    window =
+      if was_active do
+        window_update_fn.(state.window, elapsed)
+      else
+        state.window
+      end
+
+    state
+    |> Map.put(:window, window)
+    |> put_in([:active, activity_key], is_active)
+    |> Map.put(last_change_key, now)
+  end
 
   defp schedule_window_close do
     Process.send_after(self(), :close_window, @window_duration_ms)

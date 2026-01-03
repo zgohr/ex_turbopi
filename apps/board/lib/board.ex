@@ -30,9 +30,7 @@ defmodule Board do
   """
   def set_rgb(led_id, r, g, b) do
     Connection.set_rgb([{led_id, r, g, b}])
-    # Track state for persistence
-    led_key = String.to_atom("board#{led_id}")
-    Board.LEDs.set(led_key, %{r: r, g: g, b: b})
+    update_led_state("board#{led_id}", r, g, b)
   end
 
   @doc """
@@ -41,23 +39,17 @@ defmodule Board do
   """
   def set_board_rgb(r, g, b) do
     Connection.set_rgb([{1, r, g, b}, {2, r, g, b}])
-    # Track state for persistence
-    Board.LEDs.set(:board1, %{r: r, g: g, b: b})
-    Board.LEDs.set(:board2, %{r: r, g: g, b: b})
+    Enum.each(1..2, &update_led_state("board#{&1}", r, g, b))
   end
 
-  @doc """
-  Turn off RGB LED.
-  """
-  def rgb_off(led_id \\ 1) do
-    set_rgb(led_id, 0, 0, 0)
-  end
+  @doc "Turn off RGB LED."
+  def rgb_off(led_id \\ 1), do: set_rgb(led_id, 0, 0, 0)
 
-  @doc """
-  Turn off both board LEDs.
-  """
-  def board_rgb_off do
-    set_board_rgb(0, 0, 0)
+  @doc "Turn off both board LEDs."
+  def board_rgb_off, do: set_board_rgb(0, 0, 0)
+
+  defp update_led_state(led_key, r, g, b) do
+    Board.LEDs.set(String.to_atom(led_key), %{r: r, g: g, b: b})
   end
 
   # ---- Servos ----
@@ -192,57 +184,23 @@ defmodule Board do
     - `:forward_left`, `:forward_right` - 45° diagonal forward
     - `:backward_left`, `:backward_right` - 45° diagonal backward
   """
-  def drive(direction, speed \\ 50)
-
-  def drive(:forward, speed) do
-    emit_motor_telemetry(:forward, speed)
-    do_mecanum_drive(speed, 0, 0)
+  def drive(direction, speed \\ 50) do
+    {vx, vy, omega} = direction_to_velocity(direction, speed)
+    emit_motor_telemetry(direction, speed)
+    do_mecanum_drive(vx, vy, omega)
   end
 
-  def drive(:backward, speed) do
-    emit_motor_telemetry(:backward, speed)
-    do_mecanum_drive(-speed, 0, 0)
-  end
-
-  def drive(:left, speed) do
-    emit_motor_telemetry(:left, speed)
-    do_mecanum_drive(0, speed, 0)
-  end
-
-  def drive(:right, speed) do
-    emit_motor_telemetry(:right, speed)
-    do_mecanum_drive(0, -speed, 0)
-  end
-
-  def drive(:rotate_left, speed) do
-    emit_motor_telemetry(:rotate_left, speed)
-    do_mecanum_drive(0, 0, -speed)
-  end
-
-  def drive(:rotate_right, speed) do
-    emit_motor_telemetry(:rotate_right, speed)
-    do_mecanum_drive(0, 0, speed)
-  end
-
-  def drive(:forward_left, speed) do
-    emit_motor_telemetry(:forward_left, speed)
-    do_mecanum_drive(speed, speed, 0)
-  end
-
-  def drive(:forward_right, speed) do
-    emit_motor_telemetry(:forward_right, speed)
-    do_mecanum_drive(speed, -speed, 0)
-  end
-
-  def drive(:backward_left, speed) do
-    emit_motor_telemetry(:backward_left, speed)
-    do_mecanum_drive(-speed, speed, 0)
-  end
-
-  def drive(:backward_right, speed) do
-    emit_motor_telemetry(:backward_right, speed)
-    do_mecanum_drive(-speed, -speed, 0)
-  end
+  # Map direction atoms to velocity vectors
+  defp direction_to_velocity(:forward, speed), do: {speed, 0, 0}
+  defp direction_to_velocity(:backward, speed), do: {-speed, 0, 0}
+  defp direction_to_velocity(:left, speed), do: {0, speed, 0}
+  defp direction_to_velocity(:right, speed), do: {0, -speed, 0}
+  defp direction_to_velocity(:rotate_left, speed), do: {0, 0, -speed}
+  defp direction_to_velocity(:rotate_right, speed), do: {0, 0, speed}
+  defp direction_to_velocity(:forward_left, speed), do: {speed, speed, 0}
+  defp direction_to_velocity(:forward_right, speed), do: {speed, -speed, 0}
+  defp direction_to_velocity(:backward_left, speed), do: {-speed, speed, 0}
+  defp direction_to_velocity(:backward_right, speed), do: {-speed, -speed, 0}
 
   defp emit_motor_telemetry(direction, speed) do
     :telemetry.execute(

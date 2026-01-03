@@ -113,21 +113,16 @@ defmodule Board.Connection do
   # ---- Private Functions ----
 
   defp open_uart(device, baudrate) do
-    case Circuits.UART.start_link() do
-      {:ok, uart_pid} ->
-        case Circuits.UART.open(uart_pid, device,
-               speed: baudrate,
-               data_bits: 8,
-               stop_bits: 1,
-               parity: :none,
-               active: true
-             ) do
-          :ok -> {:ok, uart_pid}
-          error -> error
-        end
-
-      error ->
-        error
+    with {:ok, uart_pid} <- Circuits.UART.start_link(),
+         :ok <-
+           Circuits.UART.open(uart_pid, device,
+             speed: baudrate,
+             data_bits: 8,
+             stop_bits: 1,
+             parity: :none,
+             active: true
+           ) do
+      {:ok, uart_pid}
     end
   end
 

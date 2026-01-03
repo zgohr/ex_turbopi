@@ -19,268 +19,23 @@ defmodule Board.Protocol do
   @func_oled 10
   @func_rgb 11
 
-  # CRC8 lookup table
-  @crc8_table {
-    0,
-    94,
-    188,
-    226,
-    97,
-    63,
-    221,
-    131,
-    194,
-    156,
-    126,
-    32,
-    163,
-    253,
-    31,
-    65,
-    157,
-    195,
-    33,
-    127,
-    252,
-    162,
-    64,
-    30,
-    95,
-    1,
-    227,
-    189,
-    62,
-    96,
-    130,
-    220,
-    35,
-    125,
-    159,
-    193,
-    66,
-    28,
-    254,
-    160,
-    225,
-    191,
-    93,
-    3,
-    128,
-    222,
-    60,
-    98,
-    190,
-    224,
-    2,
-    92,
-    223,
-    129,
-    99,
-    61,
-    124,
-    34,
-    192,
-    158,
-    29,
-    67,
-    161,
-    255,
-    70,
-    24,
-    250,
-    164,
-    39,
-    121,
-    155,
-    197,
-    132,
-    218,
-    56,
-    102,
-    229,
-    187,
-    89,
-    7,
-    219,
-    133,
-    103,
-    57,
-    186,
-    228,
-    6,
-    88,
-    25,
-    71,
-    165,
-    251,
-    120,
-    38,
-    196,
-    154,
-    101,
-    59,
-    217,
-    135,
-    4,
-    90,
-    184,
-    230,
-    167,
-    249,
-    27,
-    69,
-    198,
-    152,
-    122,
-    36,
-    248,
-    166,
-    68,
-    26,
-    153,
-    199,
-    37,
-    123,
-    58,
-    100,
-    134,
-    216,
-    91,
-    5,
-    231,
-    185,
-    140,
-    210,
-    48,
-    110,
-    237,
-    179,
-    81,
-    15,
-    78,
-    16,
-    242,
-    172,
-    47,
-    113,
-    147,
-    205,
-    17,
-    79,
-    173,
-    243,
-    112,
-    46,
-    204,
-    146,
-    211,
-    141,
-    111,
-    49,
-    178,
-    236,
-    14,
-    80,
-    175,
-    241,
-    19,
-    77,
-    206,
-    144,
-    114,
-    44,
-    109,
-    51,
-    209,
-    143,
-    12,
-    82,
-    176,
-    238,
-    50,
-    108,
-    142,
-    208,
-    83,
-    13,
-    239,
-    177,
-    240,
-    174,
-    76,
-    18,
-    145,
-    207,
-    45,
-    115,
-    202,
-    148,
-    118,
-    40,
-    171,
-    245,
-    23,
-    73,
-    8,
-    86,
-    180,
-    234,
-    105,
-    55,
-    213,
-    139,
-    87,
-    9,
-    235,
-    181,
-    54,
-    104,
-    138,
-    212,
-    149,
-    203,
-    41,
-    119,
-    244,
-    170,
-    72,
-    22,
-    233,
-    183,
-    85,
-    11,
-    136,
-    214,
-    52,
-    106,
-    43,
-    117,
-    151,
-    201,
-    74,
-    20,
-    246,
-    168,
-    116,
-    42,
-    200,
-    150,
-    21,
-    75,
-    169,
-    247,
-    182,
-    232,
-    10,
-    84,
-    215,
-    137,
-    107,
-    53
-  }
+  # CRC8 polynomial: 0x07 (x^8 + x^2 + x + 1)
+  @crc8_poly 0x07
+
+  # Generate CRC8 lookup table at compile time
+  @crc8_table (for i <- 0..255 do
+                 Enum.reduce(0..7, i, fn _, crc ->
+                   if Bitwise.band(crc, 0x80) != 0 do
+                     Bitwise.bxor(Bitwise.bsl(crc, 1), @crc8_poly) |> Bitwise.band(0xFF)
+                   else
+                     Bitwise.bsl(crc, 1) |> Bitwise.band(0xFF)
+                   end
+                 end)
+               end)
+              |> List.to_tuple()
 
   @doc """
-  Calculate CRC8 checksum for data.
+  Calculate CRC8 checksum for data using polynomial 0x07.
   """
   def crc8(data) when is_binary(data) do
     data
@@ -309,15 +64,12 @@ defmodule Board.Protocol do
   """
   def pwm_servo_set_position(duration, positions) when is_list(positions) do
     duration_ms = trunc(duration * 1000)
-    count = length(positions)
+    servo_data = encode_items(positions, fn {id, pulse} -> <<id::8, pulse::little-16>> end)
 
-    servo_data =
-      positions
-      |> Enum.map(fn {id, pulse} -> <<id::8, pulse::little-16>> end)
-      |> Enum.join()
-
-    data = <<0x01, duration_ms::little-16, count::8, servo_data::binary>>
-    build_packet(@func_pwm_servo, data)
+    build_packet(
+      @func_pwm_servo,
+      <<0x01, duration_ms::little-16, length(positions)::8, servo_data::binary>>
+    )
   end
 
   # ---- Motor Commands ----
@@ -327,15 +79,8 @@ defmodule Board.Protocol do
   motors: [{motor_id, duty}, ...] where duty is -100 to 100
   """
   def motor_set_duty(motors) when is_list(motors) do
-    count = length(motors)
-
-    motor_data =
-      motors
-      |> Enum.map(fn {id, duty} -> <<id - 1::8, duty::little-float-32>> end)
-      |> Enum.join()
-
-    data = <<0x05, count::8, motor_data::binary>>
-    build_packet(@func_motor, data)
+    motor_data = encode_items(motors, fn {id, duty} -> <<id - 1::8, duty::little-float-32>> end)
+    build_packet(@func_motor, <<0x05, length(motors)::8, motor_data::binary>>)
   end
 
   @doc """
@@ -343,15 +88,8 @@ defmodule Board.Protocol do
   motors: [{motor_id, speed}, ...]
   """
   def motor_set_speed(motors) when is_list(motors) do
-    count = length(motors)
-
-    motor_data =
-      motors
-      |> Enum.map(fn {id, speed} -> <<id - 1::8, speed::little-float-32>> end)
-      |> Enum.join()
-
-    data = <<0x01, count::8, motor_data::binary>>
-    build_packet(@func_motor, data)
+    motor_data = encode_items(motors, fn {id, speed} -> <<id - 1::8, speed::little-float-32>> end)
+    build_packet(@func_motor, <<0x01, length(motors)::8, motor_data::binary>>)
   end
 
   # ---- RGB LED Commands ----
@@ -361,15 +99,13 @@ defmodule Board.Protocol do
   pixels: [{led_id, r, g, b}, ...]
   """
   def rgb_set(pixels) when is_list(pixels) do
-    count = length(pixels)
+    pixel_data = encode_items(pixels, fn {id, r, g, b} -> <<id - 1::8, r::8, g::8, b::8>> end)
+    build_packet(@func_rgb, <<0x01, length(pixels)::8, pixel_data::binary>>)
+  end
 
-    pixel_data =
-      pixels
-      |> Enum.map(fn {id, r, g, b} -> <<id - 1::8, r::8, g::8, b::8>> end)
-      |> Enum.join()
-
-    data = <<0x01, count::8, pixel_data::binary>>
-    build_packet(@func_rgb, data)
+  # Helper to encode a list of items into binary
+  defp encode_items(items, encoder_fn) do
+    items |> Enum.map(encoder_fn) |> IO.iodata_to_binary()
   end
 
   # ---- Buzzer Commands ----
@@ -397,15 +133,12 @@ defmodule Board.Protocol do
   """
   def bus_servo_set_position(duration, positions) when is_list(positions) do
     duration_ms = trunc(duration * 1000)
-    count = length(positions)
+    servo_data = encode_items(positions, fn {id, pos} -> <<id::8, pos::little-16>> end)
 
-    servo_data =
-      positions
-      |> Enum.map(fn {id, pos} -> <<id::8, pos::little-16>> end)
-      |> Enum.join()
-
-    data = <<0x01, duration_ms::little-16, count::8, servo_data::binary>>
-    build_packet(@func_bus_servo, data)
+    build_packet(
+      @func_bus_servo,
+      <<0x01, duration_ms::little-16, length(positions)::8, servo_data::binary>>
+    )
   end
 
   # ---- Parsing Incoming Packets ----

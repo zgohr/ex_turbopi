@@ -33,9 +33,7 @@ defmodule Board.Sonar do
   """
   def set_rgb(r, g, b) when r in 0..255 and g in 0..255 and b in 0..255 do
     GenServer.cast(__MODULE__, {:set_rgb, r, g, b})
-    # Track state for persistence
-    Board.LEDs.set(:sonar1, %{r: r, g: g, b: b})
-    Board.LEDs.set(:sonar2, %{r: r, g: g, b: b})
+    Enum.each(1..2, &Board.LEDs.set(:"sonar#{&1}", %{r: r, g: g, b: b}))
   end
 
   @doc """
@@ -44,9 +42,7 @@ defmodule Board.Sonar do
   def set_pixel(index, r, g, b)
       when index in [0, 1] and r in 0..255 and g in 0..255 and b in 0..255 do
     GenServer.cast(__MODULE__, {:set_pixel, index, r, g, b})
-    # Track state for persistence
-    led_key = String.to_atom("sonar#{index + 1}")
-    Board.LEDs.set(led_key, %{r: r, g: g, b: b})
+    Board.LEDs.set(:"sonar#{index + 1}", %{r: r, g: g, b: b})
   end
 
   @doc """
@@ -131,16 +127,9 @@ defmodule Board.Sonar do
   # ---- Private Functions ----
 
   defp open_i2c do
-    case Circuits.I2C.open(@i2c_bus) do
-      {:ok, ref} ->
-        # Try a test read to verify the device is present
-        case Circuits.I2C.read(ref, @i2c_addr, 1) do
-          {:ok, _} -> {:ok, ref}
-          {:error, reason} -> {:error, reason}
-        end
-
-      error ->
-        error
+    with {:ok, ref} <- Circuits.I2C.open(@i2c_bus),
+         {:ok, _} <- Circuits.I2C.read(ref, @i2c_addr, 1) do
+      {:ok, ref}
     end
   end
 

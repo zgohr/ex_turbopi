@@ -77,22 +77,18 @@ defmodule Board.Camera do
 
   def handle_call({:start_stream, _opts}, _from, %{mock_mode: true} = state) do
     Logger.info("[Camera] Mock mode: simulating stream start")
-    emit_camera_telemetry(true)
-    {:reply, {:ok, :mock}, %{state | streaming: true}}
+    {:reply, {:ok, :mock}, update_streaming_state(state, true)}
   end
 
   def handle_call({:start_stream, opts}, _from, state) do
-    # Kill any existing camera process first
     kill_existing_camera()
-
     width = Keyword.get(opts, :width, 240)
     height = Keyword.get(opts, :height, 180)
 
     case start_camera_process(width, height) do
       {:ok, pid} ->
         Logger.info("[Camera] Stream started on port #{@stream_port} (#{width}x#{height})")
-        emit_camera_telemetry(true)
-        {:reply, :ok, %{state | pid: pid, streaming: true}}
+        {:reply, :ok, %{update_streaming_state(state, true) | pid: pid}}
 
       {:error, reason} = error ->
         Logger.error("[Camera] Failed to start stream: #{inspect(reason)}")
@@ -107,15 +103,13 @@ defmodule Board.Camera do
 
   def handle_call(:stop_stream, _from, %{mock_mode: true} = state) do
     Logger.info("[Camera] Mock mode: simulating stream stop")
-    emit_camera_telemetry(false)
-    {:reply, :ok, %{state | streaming: false}}
+    {:reply, :ok, update_streaming_state(state, false)}
   end
 
   def handle_call(:stop_stream, _from, %{pid: pid} = state) do
     stop_camera_process(pid)
     Logger.info("[Camera] Stream stopped")
-    emit_camera_telemetry(false)
-    {:reply, :ok, %{state | pid: nil, streaming: false}}
+    {:reply, :ok, %{update_streaming_state(state, false) | pid: nil}}
   end
 
   @impl true
@@ -204,20 +198,21 @@ defmodule Board.Camera do
     end
   end
 
-  defp stop_camera_process(nil), do: :ok
-
   defp stop_camera_process(pid) when is_integer(pid) do
-    # Send SIGTERM first
-    System.cmd("kill", ["-TERM", Integer.to_string(pid)], stderr_to_stdout: true)
+    pid_str = Integer.to_string(pid)
+    System.cmd("kill", ["-TERM", pid_str], stderr_to_stdout: true)
     Process.sleep(300)
-    # Force kill
-    System.cmd("kill", ["-9", Integer.to_string(pid)], stderr_to_stdout: true)
-    # Also kill any other camera_stream processes
+    System.cmd("kill", ["-9", pid_str], stderr_to_stdout: true)
     System.cmd("pkill", ["-f", "camera_stream.py"], stderr_to_stdout: true)
     :ok
   end
 
   defp stop_camera_process(_), do: :ok
+
+  defp update_streaming_state(state, streaming) do
+    emit_camera_telemetry(streaming)
+    %{state | streaming: streaming}
+  end
 
   defp emit_camera_telemetry(streaming) do
     :telemetry.execute(

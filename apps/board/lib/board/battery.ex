@@ -57,12 +57,7 @@ defmodule Board.Battery do
 
   @impl true
   def handle_call(:get_voltage, _from, state) do
-    result =
-      case state.voltage_mv do
-        nil -> {:error, :no_data}
-        mv -> {:ok, mv}
-      end
-
+    result = if state.voltage_mv, do: {:ok, state.voltage_mv}, else: {:error, :no_data}
     {:reply, result, state}
   end
 
