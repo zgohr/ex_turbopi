@@ -13,13 +13,25 @@ defmodule ExTurbopiWeb.RobotLive do
   @gimbal_step 50
 
   @battery_poll_interval 5000
-  @sonar_poll_interval 200
-  @min_safe_distance_mm 100
+  @sonar_poll_interval 100
+  @min_safe_distance_mm 170
+
+  # Physics constants
+  @physics_tick_ms 50
+  # speed units per tick when accelerating
+  @acceleration 8
+  # speed units per tick when coasting
+  @friction 3
+  # speed units per tick when braking
+  @brake_decel 12
+  # matches speed slider max
+  @max_speed 50
 
   def mount(_params, _session, socket) do
     if connected?(socket) do
       send(self(), :poll_battery)
       send(self(), :poll_sonar)
+      send(self(), :physics_tick)
       # Subscribe to telemetry updates
       Board.Telemetry.subscribe()
     end
@@ -40,6 +52,12 @@ defmodule ExTurbopiWeb.RobotLive do
       |> assign(:leds, Board.LEDs.get_all())
       |> assign(:speed, 25)
       |> assign(:moving, nil)
+      |> assign(:keys_pressed, MapSet.new())
+      # Physics state
+      # -100 to 100 (negative = backward)
+      |> assign(:velocity, 0)
+      # -1 = left, 0 = straight, 1 = right
+      |> assign(:steering, 0)
       |> assign(:leds_expanded, false)
       |> assign(:battery_voltage, nil)
       |> assign(:battery_percentage, nil)
@@ -475,14 +493,62 @@ defmodule ExTurbopiWeb.RobotLive do
   defp sparkline_color(mv) when mv >= 6800, do: "text-warning"
   defp sparkline_color(_mv), do: "text-error"
 
-  # Keyboard controls
+  # Keyboard controls - track pressed keys for combined movement
   def handle_event("keydown", %{"key" => key}, socket) do
-    socket = handle_key_press(key, socket)
+    key = String.downcase(key)
+
+    # Handle gimbal separately (not tracked in keys_pressed)
+    socket =
+      case key do
+        "arrowup" ->
+          gimbal_step(:up, socket)
+
+        "arrowdown" ->
+          gimbal_step(:down, socket)
+
+        "arrowleft" ->
+          gimbal_step(:left, socket)
+
+        "arrowright" ->
+          gimbal_step(:right, socket)
+
+        " " ->
+          Board.stop()
+
+          socket
+          |> assign(:moving, nil)
+          |> assign(:keys_pressed, MapSet.new())
+          |> assign(:velocity, 0)
+          |> assign(:steering, 0)
+
+        k when k in ["w", "s", "a", "d", "q", "e"] ->
+          keys = MapSet.put(socket.assigns.keys_pressed, k)
+
+          socket
+          |> assign(:keys_pressed, keys)
+          |> update_drive_from_keys()
+
+        _ ->
+          socket
+      end
+
     {:noreply, socket}
   end
 
   def handle_event("keyup", %{"key" => key}, socket) do
-    socket = handle_key_release(key, socket)
+    key = String.downcase(key)
+
+    socket =
+      if key in ["w", "s", "a", "d", "q", "e"] do
+        keys = MapSet.delete(socket.assigns.keys_pressed, key)
+
+        socket
+        |> assign(:keys_pressed, keys)
+        |> update_drive_from_keys()
+      else
+        socket
+      end
+
     {:noreply, socket}
   end
 
@@ -595,9 +661,12 @@ defmodule ExTurbopiWeb.RobotLive do
           socket = assign(socket, :sonar_distance, distance)
 
           # Auto-stop if moving forward and too close
-          if socket.assigns.moving == :forward and distance < @min_safe_distance_mm do
+          if socket.assigns.velocity > 0 and distance < @min_safe_distance_mm do
             Board.stop()
-            assign(socket, :moving, nil)
+
+            socket
+            |> assign(:moving, nil)
+            |> assign(:velocity, 0)
           else
             socket
           end
@@ -610,79 +679,111 @@ defmodule ExTurbopiWeb.RobotLive do
     {:noreply, socket}
   end
 
+  def handle_info(:physics_tick, socket) do
+    keys = socket.assigns.keys_pressed
+    velocity = socket.assigns.velocity
+
+    w = MapSet.member?(keys, "w")
+    s = MapSet.member?(keys, "s")
+    a = MapSet.member?(keys, "a")
+    d = MapSet.member?(keys, "d")
+    q = MapSet.member?(keys, "q")
+    e = MapSet.member?(keys, "e")
+
+    # Handle rotation separately (instant, no physics)
+    socket =
+      cond do
+        q ->
+          Board.drive(:rotate_left, @max_speed)
+          assign(socket, :moving, :rotate_left)
+
+        e ->
+          Board.drive(:rotate_right, @max_speed)
+          assign(socket, :moving, :rotate_right)
+
+        true ->
+          # Calculate new velocity based on input
+          new_velocity =
+            cond do
+              # W accelerates forward, or brakes if going backward
+              w and velocity < 0 -> velocity + @brake_decel
+              w -> min(velocity + @acceleration, @max_speed)
+              # S accelerates backward, or brakes if going forward
+              s and velocity > 0 -> velocity - @brake_decel
+              s -> max(velocity - @acceleration, -@max_speed)
+              # No W/S - coast toward zero (friction)
+              velocity > 0 -> max(velocity - @friction, 0)
+              velocity < 0 -> min(velocity + @friction, 0)
+              true -> 0
+            end
+
+          # Update steering
+          new_steering =
+            cond do
+              a and not d -> -1
+              d and not a -> 1
+              true -> 0
+            end
+
+          # Check collision avoidance
+          new_velocity =
+            if new_velocity > 0 and too_close?(socket) do
+              0
+            else
+              new_velocity
+            end
+
+          # Determine direction and send motor command
+          {direction, abs_speed} = velocity_to_direction(new_velocity, new_steering)
+
+          if direction == :stop or abs_speed == 0 do
+            Board.stop()
+          else
+            Board.drive(direction, abs_speed)
+          end
+
+          socket
+          |> assign(:velocity, new_velocity)
+          |> assign(:steering, new_steering)
+          |> assign(:moving, if(abs_speed > 0, do: direction, else: nil))
+      end
+
+    Process.send_after(self(), :physics_tick, @physics_tick_ms)
+    {:noreply, socket}
+  end
+
   # Private helpers for keyboard controls
 
-  defp handle_key_press(key, socket) do
-    case String.downcase(key) do
-      "w" ->
-        drive_and_assign(:forward, socket)
-
-      "s" ->
-        drive_and_assign(:backward, socket)
-
-      "a" ->
-        drive_and_assign(:left, socket)
-
-      "d" ->
-        drive_and_assign(:right, socket)
-
-      "q" ->
-        drive_and_assign(:rotate_left, socket)
-
-      "e" ->
-        drive_and_assign(:rotate_right, socket)
-
-      "arrowup" ->
-        gimbal_step(:up, socket)
-
-      "arrowdown" ->
-        gimbal_step(:down, socket)
-
-      "arrowleft" ->
-        gimbal_step(:left, socket)
-
-      "arrowright" ->
-        gimbal_step(:right, socket)
-
-      # Space bar - stop
-      " " ->
-        Board.stop()
-        assign(socket, :moving, nil)
-
-      _ ->
-        socket
-    end
+  defp update_drive_from_keys(socket) do
+    # With physics, just update key state - physics_tick handles the rest
+    socket
   end
 
-  defp handle_key_release(key, socket) do
-    case String.downcase(key) do
-      k when k in ["w", "s", "a", "d", "q", "e"] ->
-        Board.stop()
-        assign(socket, :moving, nil)
+  defp velocity_to_direction(velocity, steering) do
+    abs_speed = abs(round(velocity))
 
-      _ ->
-        socket
-    end
+    direction =
+      cond do
+        abs_speed == 0 -> :stop
+        velocity > 0 and steering < 0 -> :forward_left
+        velocity > 0 and steering > 0 -> :forward_right
+        velocity > 0 -> :forward
+        # Reverse steering is inverted (like a real car)
+        velocity < 0 and steering < 0 -> :backward_right
+        velocity < 0 and steering > 0 -> :backward_left
+        velocity < 0 -> :backward
+        true -> :stop
+      end
+
+    {direction, abs_speed}
   end
 
-  defp drive_and_assign(direction, socket) do
-    if too_close_to_drive_forward?(direction, socket) do
-      Board.stop()
-      assign(socket, :moving, nil)
-    else
-      Board.drive(direction, socket.assigns.speed)
-      assign(socket, :moving, direction)
-    end
-  end
-
-  defp too_close_to_drive_forward?(:forward, socket) do
+  defp too_close?(socket) do
     case socket.assigns.sonar_distance do
       nil -> false
       distance -> distance < @min_safe_distance_mm
     end
   end
-
-  defp too_close_to_drive_forward?(_, _socket), do: false
 
   defp gimbal_step(direction, socket) do
     step = socket.assigns.gimbal_step

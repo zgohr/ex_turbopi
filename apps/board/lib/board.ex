@@ -150,6 +150,29 @@ defmodule Board do
     Connection.set_motor_duty([{1, -speed}, {2, -speed}, {3, -speed}, {4, -speed}])
   end
 
+  # Diagonal movements (forward/backward + strafe combined)
+  def drive(:forward_left, speed) do
+    emit_motor_telemetry(:forward_left, speed)
+    # Front-right and rear-left at speed, others stopped
+    Connection.set_motor_duty([{1, 0}, {2, speed}, {3, -speed}, {4, 0}])
+  end
+
+  def drive(:forward_right, speed) do
+    emit_motor_telemetry(:forward_right, speed)
+    # Front-left and rear-right at speed, others stopped
+    Connection.set_motor_duty([{1, -speed}, {2, 0}, {3, 0}, {4, speed}])
+  end
+
+  def drive(:backward_left, speed) do
+    emit_motor_telemetry(:backward_left, speed)
+    Connection.set_motor_duty([{1, speed}, {2, 0}, {3, 0}, {4, -speed}])
+  end
+
+  def drive(:backward_right, speed) do
+    emit_motor_telemetry(:backward_right, speed)
+    Connection.set_motor_duty([{1, 0}, {2, -speed}, {3, speed}, {4, 0}])
+  end
+
   defp emit_motor_telemetry(direction, speed) do
     :telemetry.execute(
       [:board, :motors, :command],

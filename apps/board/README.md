@@ -10,11 +10,15 @@ Main API for controlling the robot. Provides high-level functions for motors, se
 
 ```elixir
 # Motors (Mecanum wheels)
-Board.drive(:forward, 50)      # direction, speed (0-100)
+Board.drive(:forward, 50)       # direction, speed (0-100)
 Board.drive(:backward, 50)
-Board.drive(:left, 50)         # strafe left
-Board.drive(:right, 50)        # strafe right
-Board.drive(:rotate_left, 50)  # spin in place
+Board.drive(:left, 50)          # strafe left
+Board.drive(:right, 50)         # strafe right
+Board.drive(:forward_left, 50)  # diagonal movement
+Board.drive(:forward_right, 50)
+Board.drive(:backward_left, 50)
+Board.drive(:backward_right, 50)
+Board.drive(:rotate_left, 50)   # spin in place
 Board.drive(:rotate_right, 50)
 Board.stop()
 

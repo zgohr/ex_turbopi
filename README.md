@@ -8,7 +8,7 @@ Elixir/Phoenix replacement for the ROS2 Docker stack on Hiwonder TurboPi robot.
 - Motor controls with adjustable speed (WASD + QE keys)
 - Gimbal pan/tilt control (arrow keys)
 - Live camera streaming (MJPEG) with distance HUD overlay
-- Collision avoidance (auto-stops at 10cm from obstacles)
+- Collision avoidance (auto-stops at 17cm from obstacles)
 - Power monitor with voltage history graph
 - 4 RGB LEDs with state persistence: 2 on main board + 2 on ultrasonic sensor
 - Ultrasonic distance sensor
@@ -86,14 +86,39 @@ ex_turbopi_umbrella/
 └── deploy.sh            # Deploy updates (run from Mac)
 ```
 
+## Keyboard Controls
+
+| Key(s) | Action |
+|--------|--------|
+| W | Accelerate forward |
+| S | Accelerate backward / brake |
+| W+A | Forward-left diagonal |
+| W+D | Forward-right diagonal |
+| S+A | Backward-right (car-like reverse steering) |
+| S+D | Backward-left (car-like reverse steering) |
+| Q | Rotate left |
+| E | Rotate right |
+| Arrows | Gimbal pan/tilt |
+| Space | Emergency stop |
+
+**Physics-based driving:**
+- Hold W/S to accelerate, release to coast to a stop
+- Press opposite direction (S while moving forward) to brake
+- Reverse steering is inverted like a real car
+- Auto-stops at 17cm from obstacles
+
 ## Hardware API
 
 ```elixir
 # Motors
-Board.drive(:forward, 50)   # direction, speed (0-100)
+Board.drive(:forward, 50)       # direction, speed (0-100)
 Board.drive(:backward, 50)
-Board.drive(:left, 50)      # strafe
+Board.drive(:left, 50)          # strafe
 Board.drive(:right, 50)
+Board.drive(:forward_left, 50)  # diagonal
+Board.drive(:forward_right, 50)
+Board.drive(:backward_left, 50)
+Board.drive(:backward_right, 50)
 Board.drive(:rotate_left, 50)
 Board.drive(:rotate_right, 50)
 Board.stop()
