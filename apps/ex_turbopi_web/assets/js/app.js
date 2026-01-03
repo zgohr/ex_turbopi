@@ -68,9 +68,9 @@ function playMarioTheme() {
 const Hooks = {
   KeyboardControls: {
     mounted() {
-      // Prevent arrow keys from scrolling the page when controlling robot
+      // Prevent arrow keys from scrolling the page when controlling gimbal
       this.handleKeyDown = (e) => {
-        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
           e.preventDefault()
         }
       }

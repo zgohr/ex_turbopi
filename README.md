@@ -89,28 +89,31 @@ ex_turbopi_umbrella/
 
 | Key(s) | Action |
 |--------|--------|
-| W | Accelerate forward |
-| S | Accelerate backward / brake |
-| W+A | Forward-left diagonal |
-| W+D | Forward-right diagonal |
-| S+A | Backward-right (car-like reverse steering) |
-| S+D | Backward-left (car-like reverse steering) |
+| W | Forward |
+| S | Backward |
+| A | Strafe left |
+| D | Strafe right |
 | Q | Rotate left |
 | E | Rotate right |
 | Arrows | Gimbal pan/tilt |
-| Space | Emergency stop |
 
-**Physics-based driving:**
-- Hold W/S to accelerate, release to coast to a stop
-- Press opposite direction (S while moving forward) to brake
-- Reverse steering is inverted like a real car
-- Auto-stops at 17cm from obstacles
+**Holonomic mecanum control:**
+- All movement keys can be combined (e.g., W+A = diagonal, W+Q = forward while rotating)
+- True omnidirectional movement using mecanum inverse kinematics
+- Auto-stops at 17cm from obstacles (forward only)
 - Max speed slider (10-100%) limits top speed for all controls
 
 ## Hardware API
 
 ```elixir
-# Motors
+# Mecanum Drive (true omnidirectional control)
+Board.mecanum_drive(vx, vy, omega)  # vx=fwd/back, vy=strafe, omega=rotate
+Board.mecanum_drive(50, 0, 0)       # forward at 50%
+Board.mecanum_drive(50, 50, 0)      # forward-left diagonal
+Board.mecanum_drive(50, 0, 30)      # forward while rotating right
+Board.stop()
+
+# Direction-based Drive (convenience wrappers)
 Board.drive(:forward, 50)       # direction, speed (0-100)
 Board.drive(:backward, 50)
 Board.drive(:left, 50)          # strafe
@@ -121,7 +124,6 @@ Board.drive(:backward_left, 50)
 Board.drive(:backward_right, 50)
 Board.drive(:rotate_left, 50)
 Board.drive(:rotate_right, 50)
-Board.stop()
 
 # Gimbal (servos 5=tilt, 6=pan)
 Board.set_servo(5, 1500)    # servo_id, pulse (500-2500)

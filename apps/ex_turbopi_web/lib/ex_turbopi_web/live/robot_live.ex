@@ -16,22 +16,13 @@ defmodule ExTurbopiWeb.RobotLive do
   @sonar_poll_interval 100
   @min_safe_distance_mm 170
 
-  # Physics constants
-  @physics_tick_ms 50
-  # speed units per tick when accelerating
-  @acceleration 8
-  # speed units per tick when coasting
-  @friction 3
-  # speed units per tick when braking
-  @brake_decel 12
-  # default max speed
+  # Default max speed for all controls
   @default_max_speed 50
 
   def mount(_params, _session, socket) do
     if connected?(socket) do
       send(self(), :poll_battery)
       send(self(), :poll_sonar)
-      send(self(), :physics_tick)
       # Subscribe to telemetry updates
       Board.Telemetry.subscribe()
     end
@@ -53,11 +44,6 @@ defmodule ExTurbopiWeb.RobotLive do
       |> assign(:max_speed, @default_max_speed)
       |> assign(:moving, nil)
       |> assign(:keys_pressed, MapSet.new())
-      # Physics state
-      # -100 to 100 (negative = backward)
-      |> assign(:velocity, 0)
-      # -1 = left, 0 = straight, 1 = right
-      |> assign(:steering, 0)
       |> assign(:leds_expanded, false)
       |> assign(:battery_voltage, nil)
       |> assign(:battery_percentage, nil)
@@ -108,7 +94,7 @@ defmodule ExTurbopiWeb.RobotLive do
                 {if @camera_streaming, do: "Stop", else: "Start"}
               </button>
               <span class="text-sm text-base-content/60">
-                {if @camera_streaming, do: "WASD: drive | Arrows: gimbal", else: ""}
+                {if @camera_streaming, do: "WS:fwd/back AD:strafe QE:rotate", else: ""}
               </span>
             </div>
             <form phx-change="set_max_speed" class="flex items-center gap-2">
@@ -575,11 +561,12 @@ defmodule ExTurbopiWeb.RobotLive do
   defp voltage_line_color(mv) when mv >= 6800, do: "text-warning"
   defp voltage_line_color(_mv), do: "text-error"
 
-  # Keyboard controls - track pressed keys for combined movement
+  # Keyboard controls - holonomic mecanum drive
+  # W/S: forward/backward, A/D: strafe left/right, Q/E: rotate
+  # All can be combined for simultaneous translation + rotation
   def handle_event("keydown", %{"key" => key}, socket) do
     key = String.downcase(key)
 
-    # Handle gimbal separately (not tracked in keys_pressed)
     socket =
       case key do
         "arrowup" ->
@@ -594,20 +581,9 @@ defmodule ExTurbopiWeb.RobotLive do
         "arrowright" ->
           gimbal_step(:right, socket)
 
-        " " ->
-          Board.stop()
-
-          socket
-          |> assign(:moving, nil)
-          |> assign(:keys_pressed, MapSet.new())
-          |> assign(:velocity, 0)
-          |> assign(:steering, 0)
-
         k when k in ["w", "s", "a", "d", "q", "e"] ->
-          keys = MapSet.put(socket.assigns.keys_pressed, k)
-
           socket
-          |> assign(:keys_pressed, keys)
+          |> assign(:keys_pressed, MapSet.put(socket.assigns.keys_pressed, k))
           |> update_drive_from_keys()
 
         _ ->
@@ -622,10 +598,8 @@ defmodule ExTurbopiWeb.RobotLive do
 
     socket =
       if key in ["w", "s", "a", "d", "q", "e"] do
-        keys = MapSet.delete(socket.assigns.keys_pressed, key)
-
         socket
-        |> assign(:keys_pressed, keys)
+        |> assign(:keys_pressed, MapSet.delete(socket.assigns.keys_pressed, key))
         |> update_drive_from_keys()
       else
         socket
@@ -749,12 +723,11 @@ defmodule ExTurbopiWeb.RobotLive do
           socket = assign(socket, :sonar_distance, distance)
 
           # Auto-stop if moving forward and too close
-          if socket.assigns.velocity > 0 and distance < @min_safe_distance_mm do
+          # Check if W is pressed (forward movement)
+          if MapSet.member?(socket.assigns.keys_pressed, "w") and
+               distance < @min_safe_distance_mm do
             Board.stop()
-
-            socket
-            |> assign(:moving, nil)
-            |> assign(:velocity, 0)
+            socket |> assign(:moving, nil)
           else
             socket
           end
@@ -767,117 +740,52 @@ defmodule ExTurbopiWeb.RobotLive do
     {:noreply, socket}
   end
 
-  def handle_info(:physics_tick, socket) do
-    keys = socket.assigns.keys_pressed
-    velocity = socket.assigns.velocity
-    prev_moving = socket.assigns.moving
-    max_speed = socket.assigns.max_speed
-
-    w = MapSet.member?(keys, "w")
-    s = MapSet.member?(keys, "s")
-    a = MapSet.member?(keys, "a")
-    d = MapSet.member?(keys, "d")
-    q = MapSet.member?(keys, "q")
-    e = MapSet.member?(keys, "e")
-
-    # Handle rotation separately (instant, no physics)
-    socket =
-      cond do
-        q ->
-          # Only send if not already rotating left
-          if prev_moving != :rotate_left, do: Board.drive(:rotate_left, max_speed)
-          assign(socket, :moving, :rotate_left)
-
-        e ->
-          # Only send if not already rotating right
-          if prev_moving != :rotate_right, do: Board.drive(:rotate_right, max_speed)
-          assign(socket, :moving, :rotate_right)
-
-        true ->
-          # Calculate new velocity based on input
-          new_velocity =
-            cond do
-              # W accelerates forward, or brakes if going backward
-              w and velocity < 0 -> velocity + @brake_decel
-              w -> min(velocity + @acceleration, max_speed)
-              # S accelerates backward, or brakes if going forward
-              s and velocity > 0 -> velocity - @brake_decel
-              s -> max(velocity - @acceleration, -max_speed)
-              # No W/S - coast toward zero (friction)
-              velocity > 0 -> max(velocity - @friction, 0)
-              velocity < 0 -> min(velocity + @friction, 0)
-              true -> 0
-            end
-
-          # Update steering
-          new_steering =
-            cond do
-              a and not d -> -1
-              d and not a -> 1
-              true -> 0
-            end
-
-          # Check collision avoidance
-          new_velocity =
-            if new_velocity > 0 and too_close?(socket) do
-              0
-            else
-              new_velocity
-            end
-
-          # Determine direction and send motor command
-          {direction, abs_speed} = velocity_to_direction(new_velocity, new_steering)
-          new_moving = if(abs_speed > 0, do: direction, else: nil)
-
-          # Only send commands when state changes or when actively moving
-          cond do
-            # Just stopped - send stop once
-            new_moving == nil and prev_moving != nil ->
-              Board.stop()
-
-            # Moving - send command (speed might be changing)
-            new_moving != nil ->
-              Board.drive(direction, abs_speed)
-
-            # Already stopped - don't send anything
-            true ->
-              :ok
-          end
-
-          socket
-          |> assign(:velocity, new_velocity)
-          |> assign(:steering, new_steering)
-          |> assign(:moving, new_moving)
-      end
-
-    Process.send_after(self(), :physics_tick, @physics_tick_ms)
-    {:noreply, socket}
-  end
-
-  # Private helpers for keyboard controls
-
+  # Calculate velocities from pressed keys and send mecanum command
   defp update_drive_from_keys(socket) do
-    # With physics, just update key state - physics_tick handles the rest
-    socket
-  end
+    keys = socket.assigns.keys_pressed
+    speed = socket.assigns.max_speed
 
-  defp velocity_to_direction(velocity, steering) do
-    abs_speed = abs(round(velocity))
-
-    direction =
+    # Calculate velocity components from pressed keys
+    # vx: forward/backward, vy: strafe left/right, omega: rotation
+    vx =
       cond do
-        abs_speed == 0 -> :stop
-        velocity > 0 and steering < 0 -> :forward_left
-        velocity > 0 and steering > 0 -> :forward_right
-        velocity > 0 -> :forward
-        # Reverse steering is inverted (like a real car)
-        velocity < 0 and steering < 0 -> :backward_right
-        velocity < 0 and steering > 0 -> :backward_left
-        velocity < 0 -> :backward
-        true -> :stop
+        MapSet.member?(keys, "w") and not too_close?(socket) -> speed
+        MapSet.member?(keys, "s") -> -speed
+        true -> 0
       end
 
-    {direction, abs_speed}
+    vy =
+      cond do
+        MapSet.member?(keys, "a") -> speed
+        MapSet.member?(keys, "d") -> -speed
+        true -> 0
+      end
+
+    omega =
+      cond do
+        MapSet.member?(keys, "q") -> -speed
+        MapSet.member?(keys, "e") -> speed
+        true -> 0
+      end
+
+    # Determine what we're doing for the UI indicator
+    moving =
+      cond do
+        vx == 0 and vy == 0 and omega == 0 -> nil
+        omega != 0 and vx == 0 and vy == 0 -> if(omega > 0, do: :rotate_right, else: :rotate_left)
+        vx != 0 and vy == 0 and omega == 0 -> if(vx > 0, do: :forward, else: :backward)
+        vy != 0 and vx == 0 and omega == 0 -> if(vy > 0, do: :left, else: :right)
+        true -> :mecanum
+      end
+
+    # Send the command
+    if moving do
+      Board.mecanum_drive(vx, vy, omega)
+    else
+      Board.stop()
+    end
+
+    assign(socket, :moving, moving)
   end
 
   defp too_close?(socket) do

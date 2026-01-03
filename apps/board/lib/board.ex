@@ -90,6 +90,17 @@ defmodule Board do
   end
 
   # ---- Motors ----
+  #
+  # Motor layout (top-down view):
+  #   1 (FL) ---- 2 (FR)
+  #      \      /
+  #       \    /
+  #       /    \
+  #      /      \
+  #   3 (RL) ---- 4 (RR)
+  #
+  # Motors 1 and 3 (left side) are inverted in hardware.
+  # Mecanum wheels have rollers at 45° for omnidirectional movement.
 
   @doc """
   Set individual motor duty cycle.
@@ -109,68 +120,128 @@ defmodule Board do
   end
 
   @doc """
-  Drive in a direction.
-  direction: :forward, :backward, :left, :right, :rotate_left, :rotate_right
-  speed: 0-100
+  Drive using mecanum inverse kinematics with independent velocity vectors.
+
+  This allows arbitrary movement combinations - forward while rotating,
+  diagonal at any angle, etc. Motor outputs are automatically normalized
+  so no wheel exceeds 100% duty.
+
+  ## Parameters
+    - vx: forward/backward velocity (-100 to 100, positive = forward)
+    - vy: left/right strafe velocity (-100 to 100, positive = left)
+    - omega: rotational velocity (-100 to 100, positive = clockwise/right)
+
+  ## Examples
+      # Pure forward
+      Board.mecanum_drive(50, 0, 0)
+
+      # Strafe left while moving forward
+      Board.mecanum_drive(50, 50, 0)
+
+      # Forward while rotating right
+      Board.mecanum_drive(50, 0, 30)
+
+      # Diagonal at 30° (more forward than strafe)
+      Board.mecanum_drive(87, 50, 0)
+  """
+  def mecanum_drive(vx, vy, omega) do
+    # Calculate effective speed for telemetry (magnitude of translation)
+    effective_speed = round(:math.sqrt(vx * vx + vy * vy))
+    emit_motor_telemetry(:mecanum, min(effective_speed, 100))
+    do_mecanum_drive(vx, vy, omega)
+  end
+
+  # Internal mecanum drive without telemetry (used by drive/2 which emits its own)
+  defp do_mecanum_drive(vx, vy, omega) do
+    # Calculate raw motor duties using mecanum inverse kinematics
+    # Formulas account for left motor inversion
+    m1 = -vx + vy - omega
+    m2 = vx + vy - omega
+    m3 = -vx - vy - omega
+    m4 = vx - vy - omega
+
+    # Normalize if any motor exceeds 100% duty
+    max_raw = Enum.max([abs(m1), abs(m2), abs(m3), abs(m4)])
+
+    {m1, m2, m3, m4} =
+      if max_raw > 100 do
+        scale = 100 / max_raw
+        {m1 * scale, m2 * scale, m3 * scale, m4 * scale}
+      else
+        {m1, m2, m3, m4}
+      end
+
+    Connection.set_motor_duty([
+      {1, round(m1)},
+      {2, round(m2)},
+      {3, round(m3)},
+      {4, round(m4)}
+    ])
+  end
+
+  @doc """
+  Drive in a cardinal direction at given speed.
+
+  For more control, use `mecanum_drive/3` which allows arbitrary
+  movement combinations.
+
+  ## Directions
+    - `:forward`, `:backward` - longitudinal movement
+    - `:left`, `:right` - lateral strafing
+    - `:rotate_left`, `:rotate_right` - rotation in place
+    - `:forward_left`, `:forward_right` - 45° diagonal forward
+    - `:backward_left`, `:backward_right` - 45° diagonal backward
   """
   def drive(direction, speed \\ 50)
 
-  # Motor mapping: 1=front-left(inv), 2=front-right, 3=back-left(inv), 4=back-right
-  # Left side motors (1,3) are inverted, so negate their values
-
   def drive(:forward, speed) do
     emit_motor_telemetry(:forward, speed)
-    Connection.set_motor_duty([{1, -speed}, {2, speed}, {3, -speed}, {4, speed}])
+    do_mecanum_drive(speed, 0, 0)
   end
 
   def drive(:backward, speed) do
     emit_motor_telemetry(:backward, speed)
-    Connection.set_motor_duty([{1, speed}, {2, -speed}, {3, speed}, {4, -speed}])
+    do_mecanum_drive(-speed, 0, 0)
   end
 
   def drive(:left, speed) do
     emit_motor_telemetry(:left, speed)
-    # Mecanum strafe left
-    Connection.set_motor_duty([{1, speed}, {2, speed}, {3, -speed}, {4, -speed}])
+    do_mecanum_drive(0, speed, 0)
   end
 
   def drive(:right, speed) do
     emit_motor_telemetry(:right, speed)
-    # Mecanum strafe right
-    Connection.set_motor_duty([{1, -speed}, {2, -speed}, {3, speed}, {4, speed}])
+    do_mecanum_drive(0, -speed, 0)
   end
 
   def drive(:rotate_left, speed) do
     emit_motor_telemetry(:rotate_left, speed)
-    Connection.set_motor_duty([{1, speed}, {2, speed}, {3, speed}, {4, speed}])
+    do_mecanum_drive(0, 0, -speed)
   end
 
   def drive(:rotate_right, speed) do
     emit_motor_telemetry(:rotate_right, speed)
-    Connection.set_motor_duty([{1, -speed}, {2, -speed}, {3, -speed}, {4, -speed}])
+    do_mecanum_drive(0, 0, speed)
   end
 
-  # Diagonal movements (forward/backward + strafe combined)
   def drive(:forward_left, speed) do
     emit_motor_telemetry(:forward_left, speed)
-    # Front-right and rear-left at speed, others stopped
-    Connection.set_motor_duty([{1, 0}, {2, speed}, {3, -speed}, {4, 0}])
+    do_mecanum_drive(speed, speed, 0)
   end
 
   def drive(:forward_right, speed) do
     emit_motor_telemetry(:forward_right, speed)
-    # Front-left and rear-right at speed, others stopped
-    Connection.set_motor_duty([{1, -speed}, {2, 0}, {3, 0}, {4, speed}])
+    do_mecanum_drive(speed, -speed, 0)
   end
 
   def drive(:backward_left, speed) do
     emit_motor_telemetry(:backward_left, speed)
-    Connection.set_motor_duty([{1, speed}, {2, 0}, {3, 0}, {4, -speed}])
+    do_mecanum_drive(-speed, speed, 0)
   end
 
   def drive(:backward_right, speed) do
     emit_motor_telemetry(:backward_right, speed)
-    Connection.set_motor_duty([{1, 0}, {2, -speed}, {3, speed}, {4, 0}])
+    do_mecanum_drive(-speed, -speed, 0)
   end
 
   defp emit_motor_telemetry(direction, speed) do
