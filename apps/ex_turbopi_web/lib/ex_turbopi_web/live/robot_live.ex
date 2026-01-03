@@ -296,7 +296,7 @@ defmodule ExTurbopiWeb.RobotLive do
 
         <div class="flex gap-4">
           <button class="btn btn-primary flex-1" phx-click="beep">
-            <.icon name="hero-speaker-wave" class="size-5" /> Beep
+            <.icon name="hero-musical-note" class="size-5" /> Mario
           </button>
           <button class="btn btn-soft flex-1" phx-click="center_gimbal">
             Center Gimbal
@@ -680,8 +680,14 @@ defmodule ExTurbopiWeb.RobotLive do
   end
 
   def handle_event("beep", _params, socket) do
-    Board.beep()
-    {:noreply, socket}
+    # Play Mario theme intro: E E E C E G G
+    if socket.assigns.connected do
+      Task.start(fn -> play_mario_intro() end)
+      {:noreply, socket}
+    else
+      # Mock mode - play via browser audio
+      {:noreply, push_event(socket, "play_mario", %{})}
+    end
   end
 
   def handle_event("toggle_leds", _params, socket) do
@@ -925,4 +931,38 @@ defmodule ExTurbopiWeb.RobotLive do
   defp distance_hud_class(mm) when mm < 150, do: "bg-red-500/80 text-white"
   defp distance_hud_class(mm) when mm < 300, do: "bg-yellow-500/80 text-black"
   defp distance_hud_class(_mm), do: "bg-green-500/60 text-white"
+
+  # Mario theme intro: E5 E5 E5 C5 E5 G5 G4
+  defp play_mario_intro do
+    notes = [
+      # E5
+      {659, 0.1},
+      {:rest, 0.05},
+      # E5
+      {659, 0.1},
+      {:rest, 0.15},
+      # E5
+      {659, 0.1},
+      {:rest, 0.15},
+      # C5
+      {523, 0.1},
+      # E5
+      {659, 0.15},
+      {:rest, 0.2},
+      # G5
+      {784, 0.2},
+      {:rest, 0.3},
+      # G4
+      {392, 0.2}
+    ]
+
+    for {note, duration} <- notes do
+      case note do
+        :rest -> Process.sleep(round(duration * 1000))
+        freq -> Board.beep(freq, duration)
+      end
+
+      Process.sleep(round(duration * 1000))
+    end
+  end
 end

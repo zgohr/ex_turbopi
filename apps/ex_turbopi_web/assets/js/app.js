@@ -27,6 +27,43 @@ import topbar from "../vendor/topbar"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 
+// Mario theme notes: E5 E5 E5 C5 E5 G5 G4
+const MARIO_NOTES = [
+  { freq: 659, duration: 0.1 },   // E5
+  { freq: 0, duration: 0.05 },    // rest
+  { freq: 659, duration: 0.1 },   // E5
+  { freq: 0, duration: 0.15 },    // rest
+  { freq: 659, duration: 0.1 },   // E5
+  { freq: 0, duration: 0.15 },    // rest
+  { freq: 523, duration: 0.1 },   // C5
+  { freq: 659, duration: 0.15 },  // E5
+  { freq: 0, duration: 0.2 },     // rest
+  { freq: 784, duration: 0.2 },   // G5
+  { freq: 0, duration: 0.3 },     // rest
+  { freq: 392, duration: 0.2 },   // G4
+]
+
+function playMarioTheme() {
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+  let time = audioCtx.currentTime
+
+  for (const note of MARIO_NOTES) {
+    if (note.freq > 0) {
+      const osc = audioCtx.createOscillator()
+      const gain = audioCtx.createGain()
+      osc.connect(gain)
+      gain.connect(audioCtx.destination)
+      osc.type = 'square'
+      osc.frequency.value = note.freq
+      gain.gain.setValueAtTime(0.3, time)
+      gain.gain.exponentialRampToValueAtTime(0.01, time + note.duration)
+      osc.start(time)
+      osc.stop(time + note.duration)
+    }
+    time += note.duration
+  }
+}
+
 // Custom hooks for robot control
 const Hooks = {
   KeyboardControls: {
@@ -38,6 +75,9 @@ const Hooks = {
         }
       }
       window.addEventListener('keydown', this.handleKeyDown)
+
+      // Handle Mario theme in mock mode
+      this.handleEvent("play_mario", () => playMarioTheme())
     },
     destroyed() {
       window.removeEventListener('keydown', this.handleKeyDown)
