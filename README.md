@@ -80,8 +80,7 @@ ex_turbopi_umbrella/
 │   └── ex_turbopi_web/  # Phoenix web interface
 ├── config/              # Configuration files
 ├── scripts/
-│   ├── pi_setup.sh      # Pi setup script
-│   └── camera_stream.py # Python MJPEG streaming server
+│   └── pi_setup.sh      # Pi setup script
 ├── setup.sh             # First-time setup (run from Mac)
 └── deploy.sh            # Deploy updates (run from Mac)
 ```

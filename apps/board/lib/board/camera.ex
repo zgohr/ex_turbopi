@@ -9,9 +9,12 @@ defmodule Board.Camera do
   use GenServer
   require Logger
 
-  @camera_script "/home/pi/ex_turbopi_umbrella/scripts/camera_stream.py"
   @stream_port 5000
   @stream_host "192.168.0.90"
+
+  defp camera_script do
+    Application.app_dir(:board, "priv/camera_stream.py")
+  end
 
   # Client API
 
@@ -147,11 +150,11 @@ defmodule Board.Camera do
   end
 
   defp start_camera_process(width, height) do
-    if File.exists?(@camera_script) do
+    if File.exists?(camera_script()) do
       # Start the Python script as a detached background process
       # Using nohup to prevent it from dying when parent exits
       cmd =
-        "nohup python3 #{@camera_script} --port #{@stream_port} --width #{width} --height #{height} > /tmp/camera_stream.log 2>&1 & echo $!"
+        "nohup python3 #{camera_script()} --port #{@stream_port} --width #{width} --height #{height} > /tmp/camera_stream.log 2>&1 & echo $!"
 
       case System.cmd("sh", ["-c", cmd], stderr_to_stdout: true) do
         {output, 0} ->
