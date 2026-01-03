@@ -9,11 +9,10 @@ defmodule Board.ProtocolTest do
     end
 
     test "calculates correct CRC for single byte" do
-      # Known CRC8 values (using polynomial 0x07)
+      # CRC8 with TurboPi board-specific table
       assert Protocol.crc8(<<0x00>>) == 0
-      assert Protocol.crc8(<<0x01>>) == 7
-      # Verify actual computed value for 0xFF
-      assert Protocol.crc8(<<0xFF>>) == 243
+      assert Protocol.crc8(<<0x01>>) == 94
+      assert Protocol.crc8(<<0xFF>>) == 53
     end
 
     test "calculates correct CRC for multiple bytes" do
