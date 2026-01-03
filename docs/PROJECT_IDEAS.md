@@ -6,9 +6,12 @@ Focus: AI/ML Vision and Robotics Control
 
 - HD Camera with 2-DOF pan/tilt gimbal (servos 5 & 6)
 - 4x Mecanum wheels (omnidirectional movement)
-- Ultrasonic distance sensor
-- 4-channel line follower sensor
+- Ultrasonic distance sensor (front-facing)
+- Battery voltage monitoring
+- 4-channel line follower sensor (not yet implemented in Elixir)
 - Raspberry Pi 5 (quad-core 2.4GHz, 4GB+ RAM)
+
+**Note:** IMU (MPU6050) is only available on expansion board models B/C, not the basic Model A.
 
 ---
 
@@ -96,6 +99,8 @@ Record yourself driving around obstacles. Train a neural net to mimic behavior.
 Train the robot to navigate to goals using RL. Reward for reaching target, penalty for collisions.
 
 **Learn:** Sim-to-real, reward shaping, policy gradients
+
+**Note:** Collision detection requires IMU (expansion board B/C) or additional sensors like rear ultrasonic.
 
 ---
 
@@ -202,8 +207,8 @@ end
 
 ### Beam Bots Project Ideas
 
-1. **Fault-Tolerant Explorer** - If camera crashes, keep driving with ultrasonic only
-2. **LiveView Dashboard** - Phoenix web UI showing camera feed + controls
+1. **Fault-Tolerant Explorer** - If camera crashes, keep driving with ultrasonic obstacle avoidance
+2. **LiveView Dashboard** - Phoenix web UI showing camera feed + controls (basic version implemented!)
 3. **Multi-Robot Coordination** - Elixir distribution for robot swarms
 4. **Hot-Reload Behaviors** - Update tracking algorithm without stopping robot
 

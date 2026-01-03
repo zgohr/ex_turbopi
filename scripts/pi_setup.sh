@@ -61,26 +61,34 @@ sudo apt-get install -y \
     git
 
 # ==========================================
-# Step 2: Install asdf
+# Step 2: Install asdf (v0.18.0 Go binary)
 # ==========================================
-if [ ! -d "$HOME/.asdf" ]; then
-    print_step "Installing asdf..."
-    git clone https://github.com/asdf-vm/asdf.git ~/.asdf --branch v0.18.0
+ASDF_VERSION="0.18.0"
+ASDF_DIR="$HOME/.asdf"
+
+if [ ! -f "$ASDF_DIR/bin/asdf" ]; then
+    print_step "Installing asdf v${ASDF_VERSION}..."
+
+    # Create directory structure
+    mkdir -p "$ASDF_DIR/bin"
+
+    # Download and extract the Go binary
+    curl -sL "https://github.com/asdf-vm/asdf/releases/download/v${ASDF_VERSION}/asdf-v${ASDF_VERSION}-linux-arm64.tar.gz" | \
+        tar xz -C "$ASDF_DIR/bin"
+    chmod +x "$ASDF_DIR/bin/asdf"
 
     # Add to bashrc if not already there
-    if ! grep -q "asdf.sh" ~/.bashrc; then
+    if ! grep -q "asdf" ~/.bashrc; then
         echo '' >> ~/.bashrc
         echo '# asdf version manager' >> ~/.bashrc
-        echo '. "$HOME/.asdf/asdf.sh"' >> ~/.bashrc
-        echo '. "$HOME/.asdf/completions/asdf.bash"' >> ~/.bashrc
+        echo 'export PATH="$HOME/.asdf/shims:$HOME/.asdf/bin:$PATH"' >> ~/.bashrc
     fi
 else
     print_step "asdf already installed"
 fi
 
-# Source asdf for this session
-export ASDF_DIR="$HOME/.asdf"
-. "$HOME/.asdf/asdf.sh"
+# Source asdf for this session (asdf 0.16+ uses PATH, not sourcing)
+export PATH="$HOME/.asdf/shims:$HOME/.asdf/bin:$PATH"
 
 # ==========================================
 # Step 3: Install Erlang and Elixir plugins

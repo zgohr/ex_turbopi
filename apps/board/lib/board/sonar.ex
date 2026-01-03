@@ -33,6 +33,9 @@ defmodule Board.Sonar do
   """
   def set_rgb(r, g, b) when r in 0..255 and g in 0..255 and b in 0..255 do
     GenServer.cast(__MODULE__, {:set_rgb, r, g, b})
+    # Track state for persistence
+    Board.LEDs.set(:sonar1, %{r: r, g: g, b: b})
+    Board.LEDs.set(:sonar2, %{r: r, g: g, b: b})
   end
 
   @doc """
@@ -41,6 +44,9 @@ defmodule Board.Sonar do
   def set_pixel(index, r, g, b)
       when index in [0, 1] and r in 0..255 and g in 0..255 and b in 0..255 do
     GenServer.cast(__MODULE__, {:set_pixel, index, r, g, b})
+    # Track state for persistence
+    led_key = String.to_atom("sonar#{index + 1}")
+    Board.LEDs.set(led_key, %{r: r, g: g, b: b})
   end
 
   @doc """
@@ -63,6 +69,13 @@ defmodule Board.Sonar do
   """
   def connected? do
     GenServer.call(__MODULE__, :connected?)
+  end
+
+  @doc """
+  Get current pixel colors as list of {r, g, b} tuples.
+  """
+  def get_pixels do
+    GenServer.call(__MODULE__, :get_pixels)
   end
 
   # ---- Server Callbacks ----
@@ -109,6 +122,10 @@ defmodule Board.Sonar do
 
   def handle_call(:connected?, _from, state) do
     {:reply, state.i2c_ref != nil, state}
+  end
+
+  def handle_call(:get_pixels, _from, state) do
+    {:reply, state.pixels, state}
   end
 
   # ---- Private Functions ----

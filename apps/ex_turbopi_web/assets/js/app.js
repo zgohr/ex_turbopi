@@ -26,10 +26,30 @@ import {hooks as colocatedHooks} from "phoenix-colocated/ex_turbopi_web"
 import topbar from "../vendor/topbar"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
+
+// Custom hooks for robot control
+const Hooks = {
+  KeyboardControls: {
+    mounted() {
+      // Prevent arrow keys from scrolling the page when controlling robot
+      this.handleKeyDown = (e) => {
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
+          e.preventDefault()
+        }
+      }
+      window.addEventListener('keydown', this.handleKeyDown)
+    },
+    destroyed() {
+      window.removeEventListener('keydown', this.handleKeyDown)
+    }
+  }
+}
+
 const liveSocket = new LiveSocket("/live", Socket, {
-  longPollFallbackMs: 2500,
+  // Disable long-poll fallback - force WebSocket only
+  // longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks},
+  hooks: {...colocatedHooks, ...Hooks},
 })
 
 // Show progress bar on live navigation and form submits

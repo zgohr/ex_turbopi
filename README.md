@@ -5,10 +5,14 @@ Elixir/Phoenix replacement for the ROS2 Docker stack on Hiwonder TurboPi robot.
 ## Features
 
 - Web-based control dashboard (Phoenix LiveView)
-- Motor controls with adjustable speed
-- Gimbal pan/tilt sliders
-- 4 RGB LEDs: 2 on main board + 2 on ultrasonic sensor
+- Motor controls with adjustable speed (WASD + QE keys)
+- Gimbal pan/tilt control (arrow keys)
+- Live camera streaming (MJPEG) with distance HUD overlay
+- Collision avoidance (auto-stops at 10cm from obstacles)
+- Power monitor with voltage history graph
+- 4 RGB LEDs with state persistence: 2 on main board + 2 on ultrasonic sensor
 - Ultrasonic distance sensor
+- Battery voltage monitoring
 - Buzzer control
 - Auto-start on boot via systemd
 - Mock mode for development on Mac
@@ -65,14 +69,19 @@ Open `http://localhost:4000`
 ex_turbopi_umbrella/
 ├── apps/
 │   ├── board/           # Hardware drivers
-│   │   ├── Board        # Main API (motors, servos, LEDs, buzzer)
+│   │   ├── Board        # Main API (motors, servos, LEDs, buzzer, battery)
 │   │   ├── Board.Connection  # Serial protocol (/dev/ttyAMA0)
-│   │   └── Board.Sonar  # I2C ultrasonic sensor (0x77)
+│   │   ├── Board.Sonar  # I2C ultrasonic sensor (0x77)
+│   │   ├── Board.Battery  # Battery voltage monitoring
+│   │   ├── Board.Camera  # MJPEG camera streaming control
+│   │   ├── Board.Telemetry  # Power usage telemetry
+│   │   └── Board.LEDs     # LED state persistence
 │   ├── ex_turbopi/      # Core application
 │   └── ex_turbopi_web/  # Phoenix web interface
 ├── config/              # Configuration files
 ├── scripts/
-│   └── pi_setup.sh      # Pi setup script
+│   ├── pi_setup.sh      # Pi setup script
+│   └── camera_stream.py # Python MJPEG streaming server
 ├── setup.sh             # First-time setup (run from Mac)
 └── deploy.sh            # Deploy updates (run from Mac)
 ```
@@ -106,6 +115,14 @@ Board.Sonar.off()
 
 # Ultrasonic Distance
 Board.Sonar.get_distance()  # returns {:ok, mm} or {:error, reason}
+
+# Battery
+Board.get_battery()         # returns {:ok, voltage_mv} or {:error, :no_data}
+
+# Camera
+Board.start_camera()        # starts MJPEG stream on port 5000
+Board.stop_camera()         # stops camera stream
+Board.camera_streaming?()   # returns true/false
 
 # Buzzer
 Board.beep()                # default 1000Hz, 0.1s
@@ -191,7 +208,7 @@ sudo journalctl -u ex_turbopi -n 100
 
 # Try running manually
 cd /home/pi/ex_turbopi_umbrella
-. ~/.asdf/asdf.sh
+export PATH="$HOME/.asdf/shims:$HOME/.asdf/bin:$PATH"
 SECRET_KEY_BASE=$(cat .env | grep SECRET | cut -d= -f2) \
   _build/prod/rel/ex_turbopi_umbrella/bin/ex_turbopi_umbrella start
 ```

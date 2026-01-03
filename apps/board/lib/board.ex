@@ -30,6 +30,9 @@ defmodule Board do
   """
   def set_rgb(led_id, r, g, b) do
     Connection.set_rgb([{led_id, r, g, b}])
+    # Track state for persistence
+    led_key = String.to_atom("board#{led_id}")
+    Board.LEDs.set(led_key, %{r: r, g: g, b: b})
   end
 
   @doc """
@@ -38,6 +41,9 @@ defmodule Board do
   """
   def set_board_rgb(r, g, b) do
     Connection.set_rgb([{1, r, g, b}, {2, r, g, b}])
+    # Track state for persistence
+    Board.LEDs.set(:board1, %{r: r, g: g, b: b})
+    Board.LEDs.set(:board2, %{r: r, g: g, b: b})
   end
 
   @doc """
@@ -98,6 +104,7 @@ defmodule Board do
   Stop all motors.
   """
   def stop do
+    emit_motor_telemetry(:stop, 0)
     Connection.set_motor_duty([{1, 0}, {2, 0}, {3, 0}, {4, 0}])
   end
 
@@ -112,29 +119,43 @@ defmodule Board do
   # Left side motors (1,3) are inverted, so negate their values
 
   def drive(:forward, speed) do
+    emit_motor_telemetry(:forward, speed)
     Connection.set_motor_duty([{1, -speed}, {2, speed}, {3, -speed}, {4, speed}])
   end
 
   def drive(:backward, speed) do
+    emit_motor_telemetry(:backward, speed)
     Connection.set_motor_duty([{1, speed}, {2, -speed}, {3, speed}, {4, -speed}])
   end
 
   def drive(:left, speed) do
+    emit_motor_telemetry(:left, speed)
     # Mecanum strafe left
     Connection.set_motor_duty([{1, speed}, {2, speed}, {3, -speed}, {4, -speed}])
   end
 
   def drive(:right, speed) do
+    emit_motor_telemetry(:right, speed)
     # Mecanum strafe right
     Connection.set_motor_duty([{1, -speed}, {2, -speed}, {3, speed}, {4, speed}])
   end
 
   def drive(:rotate_left, speed) do
+    emit_motor_telemetry(:rotate_left, speed)
     Connection.set_motor_duty([{1, speed}, {2, speed}, {3, speed}, {4, speed}])
   end
 
   def drive(:rotate_right, speed) do
+    emit_motor_telemetry(:rotate_right, speed)
     Connection.set_motor_duty([{1, -speed}, {2, -speed}, {3, -speed}, {4, -speed}])
+  end
+
+  defp emit_motor_telemetry(direction, speed) do
+    :telemetry.execute(
+      [:board, :motors, :command],
+      %{direction: direction, speed: speed},
+      %{}
+    )
   end
 
   # ---- Buzzer ----
@@ -152,6 +173,47 @@ defmodule Board do
   """
   def buzzer_off do
     Connection.set_buzzer(0, 0, 0, 0)
+  end
+
+  # ---- Battery ----
+
+  @doc """
+  Get the current battery voltage in millivolts.
+  Returns {:ok, voltage_mv} or {:error, :no_data}.
+  """
+  def get_battery do
+    Board.Battery.get_voltage()
+  end
+
+  # ---- Camera ----
+
+  @doc """
+  Start the camera stream.
+  Stream will be available at http://192.168.0.90:5000/stream
+  """
+  def start_camera do
+    Board.Camera.start_stream()
+  end
+
+  @doc """
+  Stop the camera stream.
+  """
+  def stop_camera do
+    Board.Camera.stop_stream()
+  end
+
+  @doc """
+  Check if camera is streaming.
+  """
+  def camera_streaming? do
+    Board.Camera.streaming?()
+  end
+
+  @doc """
+  Get the camera stream URL.
+  """
+  def camera_stream_url do
+    Board.Camera.stream_url()
   end
 
   # ---- Status ----

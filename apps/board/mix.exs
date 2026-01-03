@@ -27,7 +27,9 @@ defmodule Board.MixProject do
   defp deps do
     [
       {:circuits_uart, "~> 1.5"},
-      {:circuits_i2c, "~> 2.0"}
+      {:circuits_i2c, "~> 2.0"},
+      {:telemetry, "~> 1.0"},
+      {:phoenix_pubsub, "~> 2.0"}
     ]
   end
 end
